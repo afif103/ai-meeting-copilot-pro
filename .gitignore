@@ -1,0 +1,69 @@
+# ==============================================
+# AI Meeting Copilot Pro - Git Ignore
+# ==============================================
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.pytest_cache
+.hypothesis
+.mypy_cache
+
+# Logs
+*.log
+pip-log.txt
+
+# Environment & secrets (IMPORTANT - never commit!)
+.env
+config/.env
+
+# User data (created at runtime)
+data/
+*.db
+*.sqlite
+conversation_history.json
+transcript.txt
+record.md
+
+# Exports (user-generated)
+exports/
+*.pdf
+
+# Test files (not needed for users)
+test_wasapi*.py
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.spec
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node (if any frontend)
+node_modules/
