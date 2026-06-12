@@ -66,9 +66,9 @@ The AI suggestions run locally on your machine - free, private, no API keys need
 
 1. Go to [ollama.com/download](https://ollama.com/download)
 2. Download and install **Ollama for Windows**
-3. Open Command Prompt and download the AI models (one-time, ~7 GB total):
+3. Open Command Prompt and download the AI models (one-time, ~7.2 GB total):
    ```
-   ollama pull qwen2.5-coder:7b
+   ollama pull qwen3:8b
    ollama pull llama3.2:3b
    ```
 4. Verify with `ollama list` - both models should appear
@@ -184,7 +184,7 @@ For capturing system audio (Zoom, Teams, Meet calls):
 
 ### "No AI suggestions" (Ollama mode)
 - Make sure Ollama is installed and running (`ollama list` should work in Command Prompt)
-- Make sure the models are downloaded: `ollama pull qwen2.5-coder:7b` and `ollama pull llama3.2:3b`
+- Make sure the models are downloaded: `ollama pull qwen3:8b` and `ollama pull llama3.2:3b`
 - If Ollama runs on another machine/port, set `OLLAMA_BASE_URL` in `.env`
 
 ### "API error" or "Rate limit" (Groq mode only)
@@ -206,7 +206,7 @@ For capturing system audio (Zoom, Teams, Meet calls):
 - Python 3.10 or later
 - Ollama (for local AI suggestions - no internet needed after setup)
 - Voicemeeter (for system audio capture)
-- 8GB+ RAM recommended (local 7B model needs ~5GB)
+- 8GB+ RAM recommended (local 8B model needs ~6GB)
 - NVIDIA GPU optional (speeds up transcription)
 - Internet connection only for optional Groq cloud mode
 

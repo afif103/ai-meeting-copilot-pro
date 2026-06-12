@@ -53,9 +53,9 @@ ignores instructions loses to a slightly slower one that nails the answer.
 | Model | Download | Notes |
 |-------|----------|-------|
 | llama3.2:3b | 2.0 GB | Current refine model. Fast baseline. |
-| qwen2.5-coder:7b | 4.7 GB | Current suggest model. Coding-tuned (odd fit for conversational answers). |
-| qwen3:4b | ~2.6 GB | Newer generation, strong for its size. |
-| qwen3:8b | ~5.2 GB | Quality candidate; still fits an 8 GB GPU. |
+| qwen2.5-coder:7b | 4.7 GB | Previous suggest default. Coding-tuned (odd fit for conversational answers). |
+| qwen3:4b | ~2.6 GB | Tested: leaks reasoning into answers even with think:false — not usable for suggestions. |
+| qwen3:8b | ~5.2 GB | **Current suggest default** — quality winner on this PC, fits an 8 GB GPU. |
 | gemma3:4b | ~3.3 GB | Optional alternative candidate. |
 | qwen3:14b | ~9.3 GB | **Heavy.** Exceeds 8 GB VRAM → CPU spill → slow TTFT. Manual pull only. |
 | qwen3:30b-a3b | ~18 GB | **Heavy.** MoE (3B active) so CPU-tolerable, but big download and RAM-hungry. Manual pull only, experimental. |

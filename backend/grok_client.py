@@ -40,7 +40,7 @@ MODEL = os.getenv("LLM_MODEL", "llama-3.1-8b-instant")
 
 # Ollama (local) settings
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-OLLAMA_MODEL_SUGGEST = os.getenv("OLLAMA_MODEL_SUGGEST", "qwen2.5-coder:7b")
+OLLAMA_MODEL_SUGGEST = os.getenv("OLLAMA_MODEL_SUGGEST", "qwen3:8b")
 OLLAMA_MODEL_REFINE = os.getenv("OLLAMA_MODEL_REFINE", "llama3.2:3b")
 
 # Validate API keys (only required when Groq is the default provider)
@@ -580,6 +580,19 @@ def _call_groq(prompt, api_key, max_tokens=100, temperature=0.5, fallback=None):
     )
 
 
+# Model families that emit <think> reasoning blocks by default. Live
+# suggestions need thinking OFF - it adds many seconds before the first
+# useful token and would leak reasoning text into the UI.
+THINKING_MODEL_PREFIXES = ("qwen3", "deepseek-r1")
+
+
+def _thinking_disabled_payload(model):
+    """Extra payload fields needed to run this model in non-thinking mode."""
+    if model.split(":")[0].startswith(THINKING_MODEL_PREFIXES):
+        return {"think": False}
+    return {}
+
+
 def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None):
     """
     Enhanced Ollama API call
@@ -599,6 +612,7 @@ def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None):
             "top_k": 40,
         },
     }
+    payload.update(_thinking_disabled_payload(model))
 
     try:
         start_time = time.time()
@@ -656,6 +670,7 @@ def _call_ollama_stream(prompt, max_tokens=100, temperature=0.5, model=None):
             "top_k": 40,
         },
     }
+    payload.update(_thinking_disabled_payload(model))
 
     try:
         start_time = time.time()

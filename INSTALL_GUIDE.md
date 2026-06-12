@@ -95,9 +95,9 @@ The app generates suggestions using AI that runs **on your own computer**. It's 
 1. Press **Windows key + R**, type `cmd`, press Enter
 2. In the black window, type this and press Enter:
    ```
-   ollama pull qwen2.5-coder:7b
+   ollama pull qwen3:8b
    ```
-3. Wait for the download to finish (about 4.7 GB - be patient)
+3. Wait for the download to finish (about 5.2 GB - be patient)
 4. Then type this and press Enter:
    ```
    ollama pull llama3.2:3b
@@ -108,7 +108,7 @@ The app generates suggestions using AI that runs **on your own computer**. It's 
 
 1. In the same black window, type: `ollama list`
 2. Press Enter
-3. You should see both `qwen2.5-coder:7b` and `llama3.2:3b` in the list
+3. You should see both `qwen3:8b` and `llama3.2:3b` in the list
    - If you see them, the AI is ready!
 
 ---
