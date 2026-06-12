@@ -63,6 +63,12 @@ ignores instructions loses to a slightly slower one that nails the answer.
 The script never downloads heavy models — pull them yourself
 (`ollama pull qwen3:14b`) if you decide the speed cost is worth testing.
 
+**Thinking models:** qwen3 (and deepseek-r1) emit `<think>` reasoning blocks
+by default, adding many seconds before the first useful token. The benchmark
+runs them with thinking disabled (`think: false`) because that is the only
+viable mode for live suggestions — and what the app would need to set if a
+qwen3 model becomes the default.
+
 ### This PC (RTX 3060 8 GB VRAM, 32 GB RAM)
 
 Models up to ~5.5 GB load fully into VRAM and stream fast. `qwen3:14b` will

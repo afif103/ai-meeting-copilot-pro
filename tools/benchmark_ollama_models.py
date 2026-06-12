@@ -60,6 +60,20 @@ DEFAULT_CANDIDATES = [
 # casually; qwen3:30b-a3b is ~18 GB). Pull manually if you want them.
 HEAVY_MODELS = {"qwen3:14b", "qwen3:30b-a3b", "qwen3:30b"}
 
+# Model families that emit <think> reasoning blocks by default. For live
+# suggestions thinking must be OFF (it adds many seconds before the first
+# useful token), so we benchmark these with think disabled - same as the
+# app would need to run them.
+THINKING_MODEL_PREFIXES = ("qwen3", "deepseek-r1")
+
+
+def thinking_disabled_payload(model):
+    """Extra payload fields needed to run this model in non-thinking mode."""
+    base = model.split(":")[0]
+    if base.startswith(THINKING_MODEL_PREFIXES):
+        return {"think": False}
+    return {}
+
 # Prompts mirror how the app actually uses the LLM (see backend/grok_client.py):
 # interview-style suggestions get up to 400 tokens, refine/short tasks 150.
 PROMPTS = [
@@ -165,10 +179,12 @@ def warmup(model):
     """Load the model and measure cold-load time. Returns (load_s, error)."""
     try:
         start = time.time()
+        payload = {"model": model, "prompt": "Hi", "stream": False,
+                   "options": {"num_predict": 1}}
+        payload.update(thinking_disabled_payload(model))
         resp = requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": model, "prompt": "Hi", "stream": False,
-                  "options": {"num_predict": 1}},
+            json=payload,
             timeout=(10, 300),
         )
         elapsed = time.time() - start
@@ -218,6 +234,7 @@ def bench_prompt(model, spec):
             "top_k": 40,
         },
     }
+    payload.update(thinking_disabled_payload(model))
 
     result = {
         "prompt_name": spec["name"],
