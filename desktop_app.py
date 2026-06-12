@@ -14,7 +14,15 @@ from backend.vector_store import LocalVectorStore
 from backend.audio_capture import AudioCapture
 from backend.transcription import TranscriptionService
 from backend.anonymizer import anonymize_transcript as anonymize_text
-from backend.grok_client import generate_suggestion, generate_suggestion_stream, refine_transcript
+from backend.grok_client import (
+    LLM_PROVIDER,
+    generate_suggestion,
+    generate_suggestion_stream,
+    refine_transcript,
+)
+
+# UI default for the Groq/Ollama toggle, driven by LLM_PROVIDER in .env
+DEFAULT_LLM_MODE = "groq" if LLM_PROVIDER == "groq" else "ollama"
 
 import tkinter as tk
 from tkinter import scrolledtext, filedialog, messagebox, simpledialog, ttk
@@ -139,8 +147,8 @@ class AICoplotPro:
         )
         self.username_lbl.pack(side=tk.LEFT, padx=5)
 
-        # LLM selector
-        self.llm_var = tk.StringVar(value="groq")
+        # LLM selector (defaults to LLM_PROVIDER from .env; Ollama = local)
+        self.llm_var = tk.StringVar(value=DEFAULT_LLM_MODE)
         llm_frm = tk.Frame(ctrl, bg="#2a2a3e")
         llm_frm.pack(side=tk.LEFT, padx=10)
 
@@ -1190,7 +1198,7 @@ Suggest what the user should say in response. Be concise and helpful.
             # Restore session data
             self.live_merge_str = session_data.get("live_transcript", "")
             history_text = session_data.get("history", "")
-            self.llm_var.set(session_data.get("llm_mode", "groq"))
+            self.llm_var.set(session_data.get("llm_mode", DEFAULT_LLM_MODE))
             self.persona_var.set(session_data.get("persona", "rami_ai_engineer"))
 
             # Update UI

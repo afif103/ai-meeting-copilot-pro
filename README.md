@@ -22,7 +22,7 @@ It has step-by-step instructions with pictures for everything.
 
 - Real-time audio capture (system audio or microphone)
 - Automatic speech transcription (offline, using Whisper)
-- AI-powered response suggestions (using Groq API)
+- AI-powered response suggestions (local Ollama by default - private and offline; optional Groq cloud)
 - Multiple personas (Interview mode, Call Center mode, etc.)
 - Custom persona support (paste your own prompts)
 - Session save/load
@@ -60,20 +60,26 @@ git clone https://github.com/afif103/ai-meeting-copilot-pro.git
 2. Double-click **`install.bat`**
 3. Wait for installation to complete (may take a few minutes)
 
-### Step 4: Get API Keys (Free)
+### Step 4: Install Ollama (Local AI)
 
-1. Go to [console.groq.com](https://console.groq.com)
-2. Sign up for free
-3. Go to "API Keys" and create a new key
-4. Copy the key (starts with `gsk_...`)
+The AI suggestions run locally on your machine - free, private, no API keys needed.
 
-### Step 5: Configure API Keys
+1. Go to [ollama.com/download](https://ollama.com/download)
+2. Download and install **Ollama for Windows**
+3. Open Command Prompt and download the AI models (one-time, ~7 GB total):
+   ```
+   ollama pull qwen2.5-coder:7b
+   ollama pull llama3.2:3b
+   ```
+4. Verify with `ollama list` - both models should appear
+
+### Step 5: Create the Config File
 
 1. In the app folder, find the file **`.env.example`**
-2. Make a copy and rename it to **`.env`**
-3. Open `.env` with Notepad
-4. Replace `gsk_your_api_key_here` with your actual key
-5. Save the file
+2. Make a copy and rename it to **`.env`** (install.bat does this automatically)
+3. That's it - no keys needed for local mode
+
+**Optional - Groq cloud mode:** if you prefer cloud AI, get a free key at [console.groq.com](https://console.groq.com), open `.env` in Notepad, paste the key into the three `GROQ_API_KEY_*` lines, and set `LLM_PROVIDER=groq`.
 
 ### Step 6: Install Voicemeeter (for System Audio)
 
@@ -100,9 +106,10 @@ Double-click **`run.bat`**
 2. Select audio source:
    - **System** - Captures meeting audio (requires Voicemeeter)
    - **Mic** - Captures your microphone (for video interviews)
-3. Select a persona (e.g., "Rami - AI Interview")
-4. Start your meeting/interview
-5. Watch the AI suggestions appear in real-time!
+3. AI mode starts on **Ollama** (local). Switch to **Groq** with the toggle only if you configured cloud keys
+4. Select a persona (e.g., "Rami - AI Interview")
+5. Start your meeting/interview
+6. Watch the AI suggestions appear in real-time!
 
 ### For Job Interviews (Video Recording)
 
@@ -175,13 +182,18 @@ For capturing system audio (Zoom, Teams, Meet calls):
 - Make sure the audio quality indicator shows "Good" (green)
 - Try switching between System/Mic modes
 
-### "API error" or "Rate limit"
+### "No AI suggestions" (Ollama mode)
+- Make sure Ollama is installed and running (`ollama list` should work in Command Prompt)
+- Make sure the models are downloaded: `ollama pull qwen2.5-coder:7b` and `ollama pull llama3.2:3b`
+- If Ollama runs on another machine/port, set `OLLAMA_BASE_URL` in `.env`
+
+### "API error" or "Rate limit" (Groq mode only)
 - Check your `.env` file has valid API keys
-- Groq free tier has rate limits - wait a minute and try again
+- Groq free tier has rate limits - wait a minute and try again, or switch back to Ollama
 
 ### App crashes on startup
 - Run `install.bat` again to reinstall dependencies
-- Make sure `.env` file exists with valid keys
+- Make sure the `.env` file exists (copy `.env.example` and rename it)
 
 ### Transcription is slow
 - Edit `.env` and change `WHISPER_DEVICE=cpu` to `WHISPER_DEVICE=cuda` if you have an NVIDIA GPU
@@ -192,10 +204,11 @@ For capturing system audio (Zoom, Teams, Meet calls):
 
 - Windows 10/11
 - Python 3.10 or later
-- Internet connection (for Groq API)
+- Ollama (for local AI suggestions - no internet needed after setup)
 - Voicemeeter (for system audio capture)
-- 4GB+ RAM recommended
+- 8GB+ RAM recommended (local 7B model needs ~5GB)
 - NVIDIA GPU optional (speeds up transcription)
+- Internet connection only for optional Groq cloud mode
 
 ---
 
@@ -226,7 +239,8 @@ ai-meeting-copilot-pro/
 
 Built with:
 - [Faster-Whisper](https://github.com/guillaumekln/faster-whisper) - Speech recognition
-- [Groq](https://groq.com) - Fast AI inference
+- [Ollama](https://ollama.com) - Local AI inference (default)
+- [Groq](https://groq.com) - Fast cloud AI inference (optional)
 - [ChromaDB](https://www.trychroma.com) - Vector database
 - [LangChain](https://langchain.com) - LLM orchestration
 

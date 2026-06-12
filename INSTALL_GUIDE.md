@@ -78,27 +78,38 @@ git clone https://github.com/afif103/ai-meeting-copilot-pro.git
 
 ---
 
-## STEP 4: Get Your Free API Key
+## STEP 4: Install Ollama (The Local AI)
 
-The app uses Groq AI to generate suggestions. You need a free API key.
+The app generates suggestions using AI that runs **on your own computer**. It's free, private, and works offline. No account or API key needed.
 
-### 4.1 Create Groq Account
+### 4.1 Install Ollama
 
-1. Go to: **https://console.groq.com**
-2. Click **"Sign Up"** or **"Get Started"**
-3. Create an account (you can use Google sign-in)
-4. Verify your email if required
+1. Go to: **https://ollama.com/download**
+2. Click **"Download for Windows"**
+3. Run the downloaded installer (`OllamaSetup.exe`)
+4. Follow the installer steps (just click Next/Install)
+5. Ollama now runs in the background automatically
 
-### 4.2 Get Your API Key
+### 4.2 Download the AI Models
 
-1. After logging in, go to: **https://console.groq.com/keys**
-2. Click **"Create API Key"**
-3. Give it a name (like "meeting-copilot")
-4. Click **"Create"**
-5. **IMPORTANT:** Copy the key immediately!
-   - It looks like: `gsk_abc123xyz...` (long string of letters and numbers)
-   - You can only see it once! Copy it now.
-6. Paste it somewhere safe (Notepad) temporarily
+1. Press **Windows key + R**, type `cmd`, press Enter
+2. In the black window, type this and press Enter:
+   ```
+   ollama pull qwen2.5-coder:7b
+   ```
+3. Wait for the download to finish (about 4.7 GB - be patient)
+4. Then type this and press Enter:
+   ```
+   ollama pull llama3.2:3b
+   ```
+5. Wait again (about 2 GB)
+
+### 4.3 Verify the Models
+
+1. In the same black window, type: `ollama list`
+2. Press Enter
+3. You should see both `qwen2.5-coder:7b` and `llama3.2:3b` in the list
+   - If you see them, the AI is ready!
 
 ---
 
@@ -116,21 +127,26 @@ The app uses Groq AI to generate suggestions. You need a free API key.
 6. **Rename** this file to just `.env` (remove everything except `.env`)
    - Windows might warn you about changing the extension - click Yes
 
-### 5.2 Add Your API Key
+### 5.2 You're Done (No Keys Needed!)
 
-1. **Right-click** the `.env` file → **Open with** → **Notepad**
-2. Find the lines that say:
-   ```
-   GROQ_API_KEY_REFINE=gsk_your_api_key_here
-   GROQ_API_KEY_QUICK=gsk_your_api_key_here
-   GROQ_API_KEY_SUGGEST=gsk_your_api_key_here
-   ```
-3. Replace `gsk_your_api_key_here` with your actual API key (the one you copied in Step 4)
-4. All three lines can use the same key, so it looks like:
+The default configuration already uses your local Ollama AI. You don't need to edit anything.
+
+### 5.3 (Optional) Use Groq Cloud Instead
+
+Only do this if you prefer cloud AI over local AI:
+
+1. Create a free account at **https://console.groq.com** and create an API key
+   (it looks like `gsk_abc123xyz...` - copy it immediately, you only see it once)
+2. **Right-click** the `.env` file → **Open with** → **Notepad**
+3. Paste your key after the `=` on these three lines:
    ```
    GROQ_API_KEY_REFINE=gsk_abc123xyz...
    GROQ_API_KEY_QUICK=gsk_abc123xyz...
    GROQ_API_KEY_SUGGEST=gsk_abc123xyz...
+   ```
+4. Change the provider line to:
+   ```
+   LLM_PROVIDER=groq
    ```
 5. **Save the file** (Ctrl+S or File → Save)
 6. Close Notepad
@@ -219,14 +235,19 @@ After your computer restarts:
 - Check Windows sound settings (Step 6.3)
 - Make sure B1 is enabled in Voicemeeter (Step 6.4)
 
-### "API error"
+### "No AI suggestions appear"
+- Make sure Ollama is installed (Step 4) - type `ollama list` in Command Prompt to check
+- Make sure both models are downloaded (Step 4.2)
+- Restart your computer - Ollama starts automatically with Windows
+
+### "API error" (only if using optional Groq cloud mode)
 - Check that your .env file has the correct API key
 - Make sure the key starts with `gsk_`
 - Try creating a new API key on Groq
 
 ### "App won't start"
 - Run install.bat again
-- Make sure .env file exists and has your API key
+- Make sure the .env file exists (install.bat creates it from .env.example)
 - Check for error messages in the black window
 
 ---

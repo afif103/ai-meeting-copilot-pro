@@ -28,15 +28,24 @@ except ImportError:
     print("[WARN] python-dotenv not installed. Using environment variables only.")
 
 # Configuration (now loaded from .env)
+# Provider: "ollama" = local (default), "groq" = cloud (optional)
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+
+# Groq (cloud) settings - only used when Groq is the active provider
 BASE_URL = os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 API_KEY_REFINE = os.getenv("GROQ_API_KEY_REFINE", "")
 API_KEY_QUICK = os.getenv("GROQ_API_KEY_QUICK", "")
 API_KEY_SUGGEST = os.getenv("GROQ_API_KEY_SUGGEST", "")
 MODEL = os.getenv("LLM_MODEL", "llama-3.1-8b-instant")
 
-# Validate API keys
-if not API_KEY_REFINE or not API_KEY_SUGGEST:
-    print("[WARN] API keys not found in environment. Check your .env file.")
+# Ollama (local) settings
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_MODEL_SUGGEST = os.getenv("OLLAMA_MODEL_SUGGEST", "qwen2.5-coder:7b")
+OLLAMA_MODEL_REFINE = os.getenv("OLLAMA_MODEL_REFINE", "llama3.2:3b")
+
+# Validate API keys (only required when Groq is the default provider)
+if LLM_PROVIDER == "groq" and (not API_KEY_REFINE or not API_KEY_SUGGEST):
+    print("[WARN] LLM_PROVIDER=groq but Groq API keys not found. Check your .env file.")
 
 # Logging
 logging.basicConfig(
@@ -65,6 +74,13 @@ def load_persona(persona_name="rami_ai_engineer"):
     except Exception as e:
         logger.error(f"Error loading persona: {e}")
         return None
+
+
+def _resolve_use_ollama(use_ollama):
+    """None means follow LLM_PROVIDER from .env (ollama unless set to groq)"""
+    if use_ollama is None:
+        return LLM_PROVIDER != "groq"
+    return use_ollama
 
 
 # Rate limiting
@@ -151,10 +167,13 @@ def get_feedback_adjustment():
         return ""
 
 
-def refine_transcript(raw_transcript, use_ollama=False):
+def refine_transcript(raw_transcript, use_ollama=None):
     """
     Enhanced transcript refinement with retry logic
+
+    use_ollama: True/False to force a provider, None to follow LLM_PROVIDER
     """
+    use_ollama = _resolve_use_ollama(use_ollama)
     logger.info(f" Refining transcript ({len(raw_transcript)} chars)...")
 
     prompt = f"""Refine this speech-to-text transcript: correct grammar, remove filler words (um, like, uh, you know), and make it clear and concise while preserving the original meaning. Output ONLY the refined text with no extra commentary.
@@ -165,7 +184,7 @@ Refined:"""
 
     if use_ollama:
         return _call_ollama(
-            prompt, max_tokens=150, temperature=0.0, model="llama3.2:3b"
+            prompt, max_tokens=150, temperature=0.0, model=OLLAMA_MODEL_REFINE
         )
     else:
         return _call_groq(
@@ -177,17 +196,18 @@ Refined:"""
         )
 
 
-def generate_suggestion_stream(context, snippet, use_ollama=False, persona="rami_ai_engineer", custom_prompt=None):
+def generate_suggestion_stream(context, snippet, use_ollama=None, persona="rami_ai_engineer", custom_prompt=None):
     """
     STREAMING suggestion generation - yields tokens as they arrive
 
     Args:
         context: Context summary from vector store
         snippet: Latest transcript snippet
-        use_ollama: Whether to use Ollama instead of Groq
+        use_ollama: True/False to force a provider, None to follow LLM_PROVIDER
         persona: Persona name to use (rami_ai_engineer, call_center_professional, call_center_learner, custom)
         custom_prompt: Custom prompt template (used when persona is "custom")
     """
+    use_ollama = _resolve_use_ollama(use_ollama)
     logger.info(f" Generating suggestion (streaming) with persona: {persona}...")
 
     # Summarize inputs
@@ -258,9 +278,12 @@ Adjustments: {feedback_adj}
 Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explanations."""
 
     # Build final prompt by replacing placeholders in persona prompt
+    # (feedback_adj is passed too: the built-in fallback prompt uses it,
+    # and str.format ignores unused keyword arguments)
     prompt = persona_prompt.format(
         context_summary=context_summary,
-        snippet=snippet
+        snippet=snippet,
+        feedback_adj=feedback_adj
     )
 
     # Interview persona needs more tokens for complete answers
@@ -269,7 +292,7 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
     if use_ollama:
         # Ollama doesn't support streaming easily, fallback to regular
         result = _call_ollama(
-            prompt, max_tokens=token_limit, temperature=0.5, model="qwen2.5-coder:7b"
+            prompt, max_tokens=token_limit, temperature=0.5, model=OLLAMA_MODEL_SUGGEST
         )
         if result:
             # Simulate streaming by yielding word by word
@@ -292,17 +315,18 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
                 break
 
 
-def generate_suggestion(context, snippet, use_ollama=False, persona="rami_ai_engineer", custom_prompt=None):
+def generate_suggestion(context, snippet, use_ollama=None, persona="rami_ai_engineer", custom_prompt=None):
     """
     Enhanced suggestion generation with smart context (non-streaming)
 
     Args:
         context: Context summary from vector store
         snippet: Latest transcript snippet
-        use_ollama: Whether to use Ollama instead of Groq
+        use_ollama: True/False to force a provider, None to follow LLM_PROVIDER
         persona: Persona name to use (rami_ai_engineer, call_center_professional, call_center_learner, custom)
         custom_prompt: Custom prompt template (used when persona is "custom")
     """
+    use_ollama = _resolve_use_ollama(use_ollama)
     logger.info(f" Generating suggestion with persona: {persona}...")
 
     # Summarize inputs
@@ -373,9 +397,12 @@ Adjustments: {feedback_adj}
 Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explanations."""
 
     # Build final prompt by replacing placeholders in persona prompt
+    # (feedback_adj is passed too: the built-in fallback prompt uses it,
+    # and str.format ignores unused keyword arguments)
     prompt = persona_prompt.format(
         context_summary=context_summary,
-        snippet=snippet
+        snippet=snippet,
+        feedback_adj=feedback_adj
     )
 
     # Interview persona needs more tokens for complete answers
@@ -383,7 +410,7 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
 
     if use_ollama:
         return _call_ollama(
-            prompt, max_tokens=token_limit, temperature=0.5, model="qwen2.5-coder:7b"
+            prompt, max_tokens=token_limit, temperature=0.5, model=OLLAMA_MODEL_SUGGEST
         )
     else:
         # Two-step: correct then answer
@@ -400,13 +427,14 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
         )
 
 
-def _quick_correct(text, use_ollama=False):
+def _quick_correct(text, use_ollama=None):
     """Quick text correction"""
+    use_ollama = _resolve_use_ollama(use_ollama)
     prompt = f"Correct this text to be clear and professional: '{text}'. Provide only the corrected version."
 
     if use_ollama:
         return _call_ollama(
-            prompt, max_tokens=100, temperature=0.3, model="llama3.2:3b"
+            prompt, max_tokens=100, temperature=0.3, model=OLLAMA_MODEL_REFINE
         )
     else:
         result = _call_groq(
@@ -553,11 +581,13 @@ def _call_groq(prompt, api_key, max_tokens=100, temperature=0.5, fallback=None):
     )
 
 
-def _call_ollama(prompt, max_tokens=100, temperature=0.5, model="qwen2.5-coder:7b"):
+def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None):
     """
     Enhanced Ollama API call
     """
-    ollama_url = "http://localhost:11434/api/generate"
+    if model is None:
+        model = OLLAMA_MODEL_SUGGEST
+    ollama_url = f"{OLLAMA_BASE_URL}/api/generate"
 
     payload = {
         "model": model,
@@ -613,21 +643,22 @@ def get_stats():
 
 if __name__ == "__main__":
     print(" Testing LLM Client...")
+    print(f" Provider: {LLM_PROVIDER} (Ollama: {OLLAMA_BASE_URL})")
 
-    # Test refinement
+    # Test refinement (follows LLM_PROVIDER)
     print("\n Testing refinement...")
     raw = (
         "Um, so like, we need to, you know, implement machine learning for this project"
     )
-    refined = refine_transcript(raw, use_ollama=False)
+    refined = refine_transcript(raw)
     print(f"Raw: {raw}")
     print(f"Refined: {refined}")
 
-    # Test suggestion
+    # Test suggestion (follows LLM_PROVIDER)
     print("\n Testing suggestion...")
     context = "Experienced software engineer with AI expertise"
     snippet = "We need to implement machine learning for this project"
-    suggestion = generate_suggestion(context, snippet, use_ollama=False)
+    suggestion = generate_suggestion(context, snippet)
     print(f"Context: {context}")
     print(f"Snippet: {snippet}")
     print(f"Suggestion: {suggestion}")
