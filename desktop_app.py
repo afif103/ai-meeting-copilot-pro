@@ -181,6 +181,7 @@ class AICoplotPro:
         persona_display = {
             "rami_ai_engineer": "Rami - AI Engineer",
             "rami_ai_interview": "Rami - AI Interview",
+            "rami_fullstack_interview": "Rami - Full-Stack Interview",
             "call_center_professional": "Call Center Pro (38yr)",
             "call_center_learner": "Call Center Learner (18yr)",
             "custom": "Custom Prompt"
