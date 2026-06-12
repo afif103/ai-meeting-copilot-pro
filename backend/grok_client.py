@@ -49,6 +49,14 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip(
 OLLAMA_MODEL_SUGGEST = os.getenv("OLLAMA_MODEL_SUGGEST", "qwen3:8b")
 OLLAMA_MODEL_REFINE = os.getenv("OLLAMA_MODEL_REFINE", "llama3.2:3b")
 
+# Context window for Ollama SUGGESTION calls only (refine keeps the model
+# default). The larger window fits the interview memory block; costs some
+# VRAM while the suggest model is loaded.
+try:
+    OLLAMA_NUM_CTX_SUGGEST = int(os.getenv("OLLAMA_NUM_CTX_SUGGEST", "8192"))
+except ValueError:
+    OLLAMA_NUM_CTX_SUGGEST = 8192
+
 # Validate API keys (only required when Groq is the default provider)
 if LLM_PROVIDER == "groq" and (not API_KEY_REFINE or not API_KEY_SUGGEST):
     print("[WARN] LLM_PROVIDER=groq but Groq API keys not found. Check your .env file.")
@@ -306,10 +314,18 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
     # Interview persona needs more tokens for complete answers
     token_limit = 400 if "interview" in persona else 150
 
+    # The memory persona must be literal, not creative: low temperature
+    # reduces invented details. Other personas keep the original 0.5.
+    suggest_temperature = 0.2 if "{memory}" in persona_prompt else 0.5
+
     if use_ollama:
         # Native Ollama streaming - tokens arrive as Ollama generates them
         for token in _call_ollama_stream(
-            prompt, max_tokens=token_limit, temperature=0.5, model=OLLAMA_MODEL_SUGGEST
+            prompt,
+            max_tokens=token_limit,
+            temperature=suggest_temperature,
+            model=OLLAMA_MODEL_SUGGEST,
+            num_ctx=OLLAMA_NUM_CTX_SUGGEST,
         ):
             if token:
                 yield token
@@ -435,9 +451,17 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
     # Interview persona needs more tokens for complete answers
     token_limit = 400 if "interview" in persona else 150
 
+    # The memory persona must be literal, not creative: low temperature
+    # reduces invented details. Other personas keep the original 0.5.
+    suggest_temperature = 0.2 if "{memory}" in persona_prompt else 0.5
+
     if use_ollama:
         return _call_ollama(
-            prompt, max_tokens=token_limit, temperature=0.5, model=OLLAMA_MODEL_SUGGEST
+            prompt,
+            max_tokens=token_limit,
+            temperature=suggest_temperature,
+            model=OLLAMA_MODEL_SUGGEST,
+            num_ctx=OLLAMA_NUM_CTX_SUGGEST,
         )
     else:
         # Two-step: correct then answer
@@ -621,9 +645,11 @@ def _thinking_disabled_payload(model):
     return {}
 
 
-def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None):
+def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None, num_ctx=None):
     """
     Enhanced Ollama API call
+
+    num_ctx: context window override; None keeps the model default
     """
     if model is None:
         model = OLLAMA_MODEL_SUGGEST
@@ -640,6 +666,8 @@ def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None):
             "top_k": 40,
         },
     }
+    if num_ctx:
+        payload["options"]["num_ctx"] = num_ctx
     payload.update(_thinking_disabled_payload(model))
 
     try:
@@ -673,13 +701,15 @@ def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None):
         return None
 
 
-def _call_ollama_stream(prompt, max_tokens=100, temperature=0.5, model=None):
+def _call_ollama_stream(prompt, max_tokens=100, temperature=0.5, model=None, num_ctx=None):
     """
     Native streaming Ollama API call - yields chunks as they arrive
 
     Uses /api/generate with stream:true, which returns one JSON object per
     line. Yields only non-empty text chunks; yields None once on error
     (same contract as _call_groq_stream).
+
+    num_ctx: context window override; None keeps the model default
     """
     import json
 
@@ -698,6 +728,8 @@ def _call_ollama_stream(prompt, max_tokens=100, temperature=0.5, model=None):
             "top_k": 40,
         },
     }
+    if num_ctx:
+        payload["options"]["num_ctx"] = num_ctx
     payload.update(_thinking_disabled_payload(model))
 
     try:

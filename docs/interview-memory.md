@@ -65,9 +65,14 @@ freely — your edits are never overwritten.
 
 ## Limits worth knowing
 
-- The whole memory block is capped (~4,500 characters) so prompts stay
-  inside the local model's context window. Keep files concise — bullet
-  points beat paragraphs.
+- The whole memory block is capped (~6,500 characters by default,
+  `INTERVIEW_MEMORY_BUDGET_CHARS` in `.env` to override). The app uses a
+  larger context window for interview suggestions (`OLLAMA_NUM_CTX_SUGGEST`,
+  default 8192) so the block fits. Keep files concise — bullet points beat
+  paragraphs.
+- **A real job post consumes memory budget.** A long posting in
+  `job_description.md` squeezes lower-priority sections (resume is cut
+  first). Paste the relevant parts of a posting, not the whole page.
 - Each file also has its own cap (see `backend/memory_store.py`), so one
   huge file can't crowd out the others.
 - The old personas ("Rami - AI Interview", etc.) still work unchanged but

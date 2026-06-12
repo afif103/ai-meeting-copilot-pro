@@ -17,16 +17,23 @@ facts live in editable local files instead of being baked into prompts.
 Stdlib only.
 """
 
+import os
 from pathlib import Path
 
 MEMORY_DIR = Path(__file__).parent.parent / "data" / "memory"
 
 TEMPLATE_MARKER = "<!-- TEMPLATE - fill in and delete this line -->"
 
-# Total character budget for the whole memory block. Keeps the prompt well
-# inside the model's default context window (~4096 tokens) alongside the
-# persona text, conversation context, and the answer itself.
-DEFAULT_MEMORY_BUDGET = 4500
+# Total character budget for the whole memory block (~1,600 tokens at the
+# 6500 default). The app raises num_ctx for Ollama suggestion calls so the
+# block fits alongside the persona, conversation context, and the answer
+# (see OLLAMA_NUM_CTX_SUGGEST in backend/grok_client.py). Override with
+# INTERVIEW_MEMORY_BUDGET_CHARS in .env - the app loads .env before this
+# module is imported.
+try:
+    DEFAULT_MEMORY_BUDGET = int(os.getenv("INTERVIEW_MEMORY_BUDGET_CHARS", "6500"))
+except ValueError:
+    DEFAULT_MEMORY_BUDGET = 6500
 
 
 def _resume_seed():
