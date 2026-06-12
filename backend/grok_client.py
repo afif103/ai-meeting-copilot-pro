@@ -290,16 +290,15 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
     token_limit = 400 if "interview" in persona else 150
 
     if use_ollama:
-        # Ollama doesn't support streaming easily, fallback to regular
-        result = _call_ollama(
+        # Native Ollama streaming - tokens arrive as Ollama generates them
+        for token in _call_ollama_stream(
             prompt, max_tokens=token_limit, temperature=0.5, model=OLLAMA_MODEL_SUGGEST
-        )
-        if result:
-            # Simulate streaming by yielding word by word
-            for word in result.split():
-                yield word + " "
-        else:
-            yield "Let me think about that and get back to you."
+        ):
+            if token:
+                yield token
+            else:
+                yield "Let me think about that and get back to you."
+                break
     else:
         # Use streaming API
         for token in _call_groq_stream(
@@ -632,6 +631,83 @@ def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None):
         return None
 
 
+def _call_ollama_stream(prompt, max_tokens=100, temperature=0.5, model=None):
+    """
+    Native streaming Ollama API call - yields chunks as they arrive
+
+    Uses /api/generate with stream:true, which returns one JSON object per
+    line. Yields only non-empty text chunks; yields None once on error
+    (same contract as _call_groq_stream).
+    """
+    import json
+
+    if model is None:
+        model = OLLAMA_MODEL_SUGGEST
+    ollama_url = f"{OLLAMA_BASE_URL}/api/generate"
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": True,
+        "options": {
+            "num_predict": max_tokens,
+            "temperature": temperature,
+            "top_p": 0.9,
+            "top_k": 40,
+        },
+    }
+
+    try:
+        start_time = time.time()
+
+        response = requests.post(ollama_url, json=payload, timeout=60, stream=True)
+
+        if response.status_code != 200:
+            logger.error(
+                f" Ollama stream error: {response.status_code} - {response.text[:200]}"
+            )
+            yield None
+            return
+
+        full_text = ""
+        for line in response.iter_lines():
+            if not line:
+                continue
+            try:
+                data = json.loads(line.decode("utf-8"))
+            except json.JSONDecodeError:
+                continue
+
+            # Ollama can report an error mid-stream in a 200 response
+            if data.get("error"):
+                logger.error(f" Ollama stream error: {data['error']}")
+                yield None
+                return
+
+            chunk = data.get("response", "")
+            if chunk:
+                full_text += chunk
+                yield chunk
+
+            if data.get("done"):
+                break
+
+        elapsed = time.time() - start_time
+        logger.info(f" Ollama stream success ({elapsed:.2f}s, {len(full_text)} chars)")
+
+    except requests.Timeout:
+        logger.error("  Ollama stream timeout")
+        yield None
+
+    except requests.ConnectionError:
+        logger.error(" Ollama not running. Start with: ollama serve")
+        yield None
+
+    except Exception as e:
+        logger.error(f" Ollama stream exception: {e}")
+        yield None
+
+
 def get_stats():
     """Get API usage statistics"""
     return {
@@ -662,6 +738,24 @@ if __name__ == "__main__":
     print(f"Context: {context}")
     print(f"Snippet: {snippet}")
     print(f"Suggestion: {suggestion}")
+
+    # Test streaming suggestion (native Ollama streaming when provider=ollama)
+    print("\n Testing streaming suggestion...")
+    chunk_count = 0
+    stream_start = time.time()
+    first_chunk_time = None
+    for token in generate_suggestion_stream(context, snippet):
+        if first_chunk_time is None:
+            first_chunk_time = time.time() - stream_start
+        print(token, end="", flush=True)
+        chunk_count += 1
+    total_time = time.time() - stream_start
+    print(
+        f"\n [STREAM] {chunk_count} chunks, "
+        f"first chunk in {first_chunk_time:.2f}s, total {total_time:.2f}s"
+        if first_chunk_time is not None
+        else "\n [STREAM] No chunks received"
+    )
 
     print("\n Stats:", get_stats())
     print("\n Test complete")
