@@ -27,6 +27,12 @@ try:
 except ImportError:
     print("[WARN] python-dotenv not installed. Using environment variables only.")
 
+# Interview memory (local files in data/memory) - see backend/memory_store.py
+try:
+    from backend.memory_store import build_memory_block
+except ImportError:
+    from memory_store import build_memory_block
+
 # Configuration (now loaded from .env)
 # Provider: "ollama" = local (default), "groq" = cloud (optional)
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
@@ -277,13 +283,24 @@ Adjustments: {feedback_adj}
 
 Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explanations."""
 
+    # Interview memory: only personas containing {memory} use it; facts
+    # come from local files in data/memory (see backend/memory_store.py)
+    memory_block = ""
+    if "{memory}" in persona_prompt:
+        try:
+            memory_block = build_memory_block()
+        except Exception as e:
+            logger.error(f" Memory load failed: {e}")
+            memory_block = ("(Memory unavailable. Answer from general "
+                            "experience; do not invent specifics.)")
+
     # Build final prompt by replacing placeholders in persona prompt
-    # (feedback_adj is passed too: the built-in fallback prompt uses it,
-    # and str.format ignores unused keyword arguments)
+    # (extra kwargs are safe: str.format ignores unused keyword arguments)
     prompt = persona_prompt.format(
         context_summary=context_summary,
         snippet=snippet,
-        feedback_adj=feedback_adj
+        feedback_adj=feedback_adj,
+        memory=memory_block
     )
 
     # Interview persona needs more tokens for complete answers
@@ -395,13 +412,24 @@ Adjustments: {feedback_adj}
 
 Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explanations."""
 
+    # Interview memory: only personas containing {memory} use it; facts
+    # come from local files in data/memory (see backend/memory_store.py)
+    memory_block = ""
+    if "{memory}" in persona_prompt:
+        try:
+            memory_block = build_memory_block()
+        except Exception as e:
+            logger.error(f" Memory load failed: {e}")
+            memory_block = ("(Memory unavailable. Answer from general "
+                            "experience; do not invent specifics.)")
+
     # Build final prompt by replacing placeholders in persona prompt
-    # (feedback_adj is passed too: the built-in fallback prompt uses it,
-    # and str.format ignores unused keyword arguments)
+    # (extra kwargs are safe: str.format ignores unused keyword arguments)
     prompt = persona_prompt.format(
         context_summary=context_summary,
         snippet=snippet,
-        feedback_adj=feedback_adj
+        feedback_adj=feedback_adj,
+        memory=memory_block
     )
 
     # Interview persona needs more tokens for complete answers

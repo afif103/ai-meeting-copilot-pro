@@ -20,6 +20,7 @@ from backend.grok_client import (
     generate_suggestion_stream,
     refine_transcript,
 )
+from backend.memory_store import ensure_memory_files
 
 # UI default for the Groq/Ollama toggle, driven by LLM_PROVIDER in .env
 DEFAULT_LLM_MODE = "groq" if LLM_PROVIDER == "groq" else "ollama"
@@ -190,6 +191,7 @@ class AICoplotPro:
             "rami_ai_engineer": "Rami - AI Engineer",
             "rami_ai_interview": "Rami - AI Interview",
             "rami_fullstack_interview": "Rami - Full-Stack Interview",
+            "rami_interview_memory": "Rami - Interview (Memory)",
             "call_center_professional": "Call Center Pro (38yr)",
             "call_center_learner": "Call Center Learner (18yr)",
             "custom": "Custom Prompt"
@@ -1473,6 +1475,11 @@ def main():
 
     # Setup
     os.makedirs("data", exist_ok=True)
+
+    # Interview memory files (templates created once, never overwritten)
+    created = ensure_memory_files()
+    if created:
+        print(f"Created memory templates in data/memory: {', '.join(created)}")
 
     # User selection
     username = "default"
