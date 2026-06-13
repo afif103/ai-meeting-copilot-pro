@@ -1,0 +1,56 @@
+# Profiles
+
+Multiple people can use the app on the same PC, each with completely
+separate, private interview memory. Profiles use neutral labels — just a
+name the person chooses ("Rami", "Ahmad", "Fatima", …). The app never
+asks for or stores relationship labels.
+
+## Adding and selecting a profile
+
+- The **Profile** dropdown in the top bar shows all profiles. Selecting
+  one switches the active profile immediately — no restart needed. The
+  memory persona ("Rami - Interview (Memory)" style) reads the selected
+  profile's memory from the very next suggestion.
+- **Add Profile** asks for a display name, creates the profile with blank
+  guided memory templates, and selects it. Invalid names (empty, or
+  nothing usable in them) show an error. Names must be unique — "Rami"
+  and "rami" count as the same name and are rejected with a clear
+  message. Different names that happen to simplify to the same internal
+  id are fine; the id gets a unique suffix automatically.
+
+Persona selection is separate from profiles: the persona controls *how*
+answers sound, the profile controls *whose facts* are used.
+
+## Where profile memory lives
+
+```
+data/profiles/
+  profiles.json           <- profile list + which one is active
+  <profile-id>/
+    profile.json          <- display name
+    memory/               <- this profile's 7 memory files
+```
+
+Each profile's `memory/` works exactly like the original memory system
+(same files, template markers, caps — see docs/interview-memory.md).
+Edit the files of the profile you care about; each profile's job
+description, stories, and resume are completely independent.
+
+## Privacy
+
+The whole `data/` folder is gitignored. Profile names, the registry, and
+every memory file stay on this PC and are never committed or pushed.
+
+## How the original (Rami) memory was migrated
+
+On first run after this feature, the app creates a default profile named
+"Rami" and **copies** the existing `data/memory/` files into
+`data/profiles/rami/memory/`. The legacy `data/memory/` files are left
+untouched as a backup — nothing is deleted or modified. The migration
+runs once (a flag in `profiles.json` remembers it) and never overwrites
+files that already exist in the profile.
+
+## What's coming separately
+
+Role/mode selection (interview vs. call-center vs. meeting assistance,
+etc.) is a separate planned feature and is not part of profiles.

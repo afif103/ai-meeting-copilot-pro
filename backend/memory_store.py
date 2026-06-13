@@ -1,13 +1,17 @@
 """
-Local interview memory store.
+Local interview memory store (profile-aware).
 
-Personas define HOW Rami answers (behavior, style, length). These memory
+Personas define HOW answers sound (behavior, style, length). These memory
 files define WHAT is true (resume, projects, job context, stories), so
 facts live in editable local files instead of being baked into prompts.
 
-- Files live in data/memory/ (gitignored - private, never leaves this PC).
+- Each profile has its own memory directory (see backend/profile_store.py):
+  data/profiles/<id>/memory/. All of it is gitignored - private, local.
+- Functions take an optional profile_id; None means the active profile.
+  If the profile system is unavailable, the legacy data/memory directory
+  is used as a safe fallback.
 - Missing files are created as guided templates. Existing files are NEVER
-  overwritten.
+  overwritten. Templates are neutral - they contain no personal facts.
 - A file that still contains TEMPLATE_MARKER is treated as unfilled and is
   excluded from prompts, so placeholder text can never reach the LLM.
 - build_memory_block() concatenates the filled files in priority order
@@ -20,7 +24,12 @@ Stdlib only.
 import os
 from pathlib import Path
 
-MEMORY_DIR = Path(__file__).parent.parent / "data" / "memory"
+# Legacy single-user memory location (pre-profiles). Safe fallback when
+# the profile system is unavailable; never deleted by this module.
+LEGACY_MEMORY_DIR = Path(__file__).parent.parent / "data" / "memory"
+
+# Test hook: when set, all functions use this directory directly.
+_OVERRIDE_DIR = None
 
 TEMPLATE_MARKER = "<!-- TEMPLATE - fill in and delete this line -->"
 
@@ -36,28 +45,35 @@ except ValueError:
     DEFAULT_MEMORY_BUDGET = 6500
 
 
-def _resume_seed():
-    """Seed resume.md from the existing data/resume.txt when available."""
-    resume_txt = MEMORY_DIR.parent / "resume.txt"
-    if resume_txt.exists():
+def _memory_dir(profile_id=None):
+    """Resolve the memory directory for a profile (None = active profile).
+
+    FAIL CLOSED: once the profile system imports, errors propagate - an
+    unknown profile id raises ValueError and registry problems raise
+    rather than silently exposing the legacy (Rami) memory to another
+    profile. The legacy data/memory fallback applies ONLY when the
+    profile system itself is absent (pre-profile installs).
+    """
+    if _OVERRIDE_DIR is not None:
+        return Path(_OVERRIDE_DIR)
+    try:
+        from backend import profile_store
+    except ImportError:
         try:
-            content = resume_txt.read_text(encoding="utf-8").strip()
-            if content:
-                return "# Resume\n\n" + content + "\n"
-        except OSError:
-            pass
-    return (
-        TEMPLATE_MARKER + "\n"
-        "# Resume\n"
-        "\n"
-        "(Paste the plain text of your current resume here, then delete the\n"
-        "marker line at the top so the AI starts using it.)\n"
-    )
+            import profile_store
+        except ImportError:
+            # No profile system at all - backward-compatible legacy mode
+            return LEGACY_MEMORY_DIR
+
+    if profile_id is None:
+        profile_id = profile_store.get_active_profile_id()
+    return profile_store.get_profile_memory_dir(profile_id)
 
 
 # Files in PRIORITY ORDER - this is also the injection order, and the
 # character budget is spent top to bottom, so put what matters most for
 # the next interview first. "cap" is the per-file character limit.
+# Templates are NEUTRAL: new profiles start with guidance only, no facts.
 MEMORY_FILES = [
     {
         "filename": "answer_rules.md",
@@ -71,9 +87,8 @@ MEMORY_FILES = [
             "the marker line at the top. Examples (replace with your own):\n"
             "\n"
             "- Keep answers 3-5 sentences unless asked to go deeper\n"
-            "- Lead with my AI storefront project for infrastructure questions\n"
-            "- Mention my construction background only for teamwork/pressure questions\n"
-            "- Never discuss salary expectations unless asked directly\n"
+            "- Only use facts and numbers from these memory files\n"
+            "- If I don't know something: say so honestly\n"
         ),
     },
     {
@@ -89,9 +104,8 @@ MEMORY_FILES = [
             "\n"
             "- Company name and what they build\n"
             "- Role title and seniority\n"
-            "- Required tech stack (so answers can emphasize matching experience)\n"
+            "- Required skills (so answers can emphasize matching experience)\n"
             "- Key responsibilities from the posting\n"
-            "- Anything from the recruiter call worth remembering\n"
         ),
     },
     {
@@ -106,7 +120,7 @@ MEMORY_FILES = [
             "at the top. Useful things to include:\n"
             "\n"
             "- Who I am professionally in 2-3 sentences\n"
-            "- Years of experience and the career-change story (if asked)\n"
+            "- Years of experience and my career story\n"
             "- My strongest skills\n"
             "- What role I am looking for\n"
         ),
@@ -122,82 +136,106 @@ MEMORY_FILES = [
             "Write 2-4 REAL stories you can defend in follow-up questions, then\n"
             "delete the marker line at the top. Suggested structure per story:\n"
             "\n"
-            "## A failure / hard bug story\n"
-            "- Situation, what broke, what I did, what changed after\n"
+            "## A challenge or problem I solved\n"
+            "- Situation, what I did, what changed after\n"
             "- Only use numbers that are real and you can explain\n"
             "\n"
-            "## A conflict / teamwork story\n"
+            "## A teamwork story\n"
             "\n"
             "## A story I am proud of\n"
         ),
     },
     {
         "filename": "project_ai_storefront.md",
-        "title": "Project: multi-tenant SaaS / AI storefront",
+        "title": "Main project",
         "cap": 900,
         "template": (
-            "# Project: Multi-tenant SaaS / AI Storefront Platform\n"
+            TEMPLATE_MARKER + "\n"
+            "# Main Project\n"
             "\n"
-            "- Multi-tenant SaaS platform with an AI storefront\n"
-            "- FastAPI backend\n"
-            "- PostgreSQL with tenant isolation / RLS (row-level security)\n"
-            "- Redis\n"
-            "- Next.js frontend\n"
-            "- Product catalog and storefront\n"
-            "- Orders, donations, pledges\n"
-            "- POS order history, cancel, receipt reprint\n"
-            "- Inventory tracking and stock movements\n"
-            "- Analytics\n"
-            "- AI assistant\n"
-            "- AWS deployment: ECS Fargate, RDS, Redis, S3, CloudFront, WAF, ALB/HTTPS\n"
-            "- Dev workflow: ChatGPT as architect/reviewer, Claude Code as implementer\n"
+            "Describe your most important project or work experience, then\n"
+            "delete the marker line at the top. Useful things to include:\n"
+            "\n"
+            "- What it is and who it is for\n"
+            "- What you personally did\n"
+            "- Tools/technology used\n"
+            "- Anything measurable you can defend\n"
         ),
     },
     {
         "filename": "project_meeting_copilot.md",
-        "title": "Project: AI Meeting Copilot (this app)",
+        "title": "Second project",
         "cap": 800,
         "template": (
-            "# Project: AI Meeting Copilot Pro\n"
+            TEMPLATE_MARKER + "\n"
+            "# Second Project\n"
             "\n"
-            "- Local-first, privacy-focused interview/meeting copilot for Windows\n"
-            "- Real-time audio capture (system audio via Voicemeeter, or microphone)\n"
-            "- Offline speech-to-text with faster-whisper + voice activity detection\n"
-            "- Local LLM suggestions via Ollama (default qwen3:8b) with native token streaming\n"
-            "- Optional Groq cloud mode; local Ollama is the default\n"
-            "- Disabled thinking mode for qwen3-family models to keep first-token latency low\n"
-            "- ChromaDB vector store with per-user isolation for uploaded documents\n"
-            "- Regex-based PII anonymizer runs before any prompt\n"
-            "- Tkinter desktop UI: live transcript, streaming suggestions, session save/load, PDF/TXT export\n"
-            "- Benchmarked local models for latency and quality (first token ~0.2-0.6s warm)\n"
-            "- Dev workflow: ChatGPT as architect/reviewer, Claude Code as implementer\n"
+            "Describe another project or work experience, then delete the\n"
+            "marker line at the top. Same structure as the main project.\n"
         ),
     },
     {
         "filename": "resume.md",
         "title": "Resume",
         "cap": 1800,
-        "template": _resume_seed,
+        "template": (
+            TEMPLATE_MARKER + "\n"
+            "# Resume\n"
+            "\n"
+            "(Paste the plain text of your current resume or CV here, then\n"
+            "delete the marker line at the top so it starts being used.)\n"
+        ),
     },
 ]
 
 
-def ensure_memory_files():
-    """Create data/memory and any missing files. Never overwrites.
+def _ensure_files_in(mem_dir):
+    """Create the directory and any missing template files. Never overwrites."""
+    mem_dir.mkdir(parents=True, exist_ok=True)
+    created = []
+    for spec in MEMORY_FILES:
+        path = mem_dir / spec["filename"]
+        if not path.exists():
+            path.write_text(spec["template"], encoding="utf-8")
+            created.append(spec["filename"])
+    return created
+
+
+def ensure_memory_files(profile_id=None):
+    """Create missing memory templates for a profile (None = active).
 
     Returns the list of filenames that were created.
     """
-    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    created = []
-    for spec in MEMORY_FILES:
-        path = MEMORY_DIR / spec["filename"]
-        if not path.exists():
-            template = spec["template"]
-            if callable(template):
-                template = template()
-            path.write_text(template, encoding="utf-8")
-            created.append(spec["filename"])
-    return created
+    return _ensure_files_in(_memory_dir(profile_id))
+
+
+# Files that contain personal EXPERIENCE. answer_rules.md and
+# job_description.md shape answers but hold no personal facts, so they
+# alone do not make a profile ready for personal interview answers.
+PERSONAL_FACT_FILES = (
+    "resume.md",
+    "career_profile.md",
+    "interview_stories.md",
+    "project_ai_storefront.md",
+    "project_meeting_copilot.md",
+)
+
+
+def has_profile_facts(profile_id=None):
+    """True if the profile has at least one filled personal-experience file.
+
+    A file counts only when it exists, is non-empty, and no longer carries
+    the template marker.
+    """
+    mem_dir = _memory_dir(profile_id)
+    for name in PERSONAL_FACT_FILES:
+        try:
+            content = (mem_dir / name).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if content and TEMPLATE_MARKER not in content:
+            return True
+    return False
 
 
 def _truncate(text, cap):
@@ -210,11 +248,11 @@ def _truncate(text, cap):
     return text[:cut].rstrip() + "\n[...truncated...]"
 
 
-def _load_filled_sections():
+def _load_filled_sections(mem_dir):
     """Return (title, content) for files that are filled in (no marker)."""
     sections = []
     for spec in MEMORY_FILES:
-        path = MEMORY_DIR / spec["filename"]
+        path = mem_dir / spec["filename"]
         try:
             content = path.read_text(encoding="utf-8").strip()
         except OSError:
@@ -231,14 +269,15 @@ _EMPTY_MEMORY_NOTE = (
 )
 
 # Cache: rebuild only when a memory file changes (so edits apply live
-# without restarting the app, but unchanged files cost 7 stat calls).
+# without restarting the app). The stamp includes the directory, so
+# switching profiles invalidates it automatically.
 _cache = {"stamp": None, "block": ""}
 
 
-def _dir_stamp():
-    stamp = [str(MEMORY_DIR)]
+def _dir_stamp(mem_dir):
+    stamp = [str(mem_dir)]
     for spec in MEMORY_FILES:
-        path = MEMORY_DIR / spec["filename"]
+        path = mem_dir / spec["filename"]
         try:
             st = path.stat()
             stamp.append((spec["filename"], st.st_mtime_ns, st.st_size))
@@ -247,15 +286,21 @@ def _dir_stamp():
     return tuple(stamp)
 
 
-def build_memory_block(max_chars=DEFAULT_MEMORY_BUDGET):
-    """Build the memory text injected into {memory} persona prompts."""
-    ensure_memory_files()
+def build_memory_block(profile_id=None, max_chars=None):
+    """Build the memory text injected into {memory} persona prompts.
 
-    stamp = (_dir_stamp(), max_chars)
+    profile_id None = the active profile; max_chars None = default budget.
+    """
+    if max_chars is None:
+        max_chars = DEFAULT_MEMORY_BUDGET
+    mem_dir = _memory_dir(profile_id)
+    _ensure_files_in(mem_dir)
+
+    stamp = (_dir_stamp(mem_dir), max_chars)
     if _cache["stamp"] == stamp:
         return _cache["block"]
 
-    sections = _load_filled_sections()
+    sections = _load_filled_sections(mem_dir)
     if not sections:
         block = _EMPTY_MEMORY_NOTE
     else:
@@ -281,57 +326,52 @@ if __name__ == "__main__":
     import sys
     import tempfile
 
-    print("Testing memory_store...")
+    print("Testing memory_store (profile-aware)...")
     this = sys.modules[__name__]
-    real_dir = MEMORY_DIR
 
     with tempfile.TemporaryDirectory() as tmp:
-        this.MEMORY_DIR = Path(tmp) / "memory"
+        this._OVERRIDE_DIR = Path(tmp) / "memory"
 
         # 1. Templates are created once, never overwritten
         created = ensure_memory_files()
         assert len(created) == len(MEMORY_FILES), created
         assert ensure_memory_files() == []
-        print(f"[OK] created {len(created)} files in temp dir")
+        print(f"[OK] created {len(created)} neutral template files")
 
-        # 2. Marker files are excluded; seeded files are included
+        # 2. Fresh templates are all markered -> safe empty note
         block = build_memory_block()
+        assert block == _EMPTY_MEMORY_NOTE
         assert TEMPLATE_MARKER not in block
-        assert "replace with your own" not in block  # template guidance text
-        assert "FastAPI" in block, "storefront seed missing"
-        assert "faster-whisper" in block, "copilot seed missing"
-        print("[OK] marker files excluded, seeded facts included")
+        print("[OK] fresh profile produces the safe empty note")
 
-        # 3. Filling a file makes it appear, in priority order (first)
-        (this.MEMORY_DIR / "answer_rules.md").write_text(
+        # 3. Filling files makes them appear, in priority order
+        (this._OVERRIDE_DIR / "answer_rules.md").write_text(
             "# Answer Rules\n- Always answer in first person\n",
+            encoding="utf-8",
+        )
+        (this._OVERRIDE_DIR / "project_ai_storefront.md").write_text(
+            "# Main Project\nA inventory system I built with Python.\n",
             encoding="utf-8",
         )
         block = build_memory_block()
         assert "Always answer in first person" in block
-        assert block.index("Answer rules") < block.index("FastAPI")
-        print("[OK] live reload + priority order work")
+        assert "inventory system" in block
+        assert block.index("Answer rules") < block.index("Main project")
+        assert "replace with your own" not in block
+        print("[OK] live reload + priority order + marker exclusion work")
 
         # 4. Budget is respected
         small = build_memory_block(max_chars=400)
         assert len(small) <= 430, len(small)
         print("[OK] character budget respected")
 
-        # 5. Empty state has a safe note
-        for spec in MEMORY_FILES:
-            (this.MEMORY_DIR / spec["filename"]).write_text(
-                TEMPLATE_MARKER, encoding="utf-8"
-            )
-        assert build_memory_block() == _EMPTY_MEMORY_NOTE
-        print("[OK] empty memory produces a safe note")
+        this._OVERRIDE_DIR = None
+        _cache["stamp"] = None
 
-    # Back to the real directory: create real files and show a preview
-    this.MEMORY_DIR = real_dir
-    _cache["stamp"] = None
-    created = ensure_memory_files()
-    print(f"\nReal dir: {MEMORY_DIR}")
-    print(f"Created now: {created or '(all files already existed)'}")
+    # Real resolution: active profile via profile_store (creates default
+    # profile + migrates legacy memory on first ever run)
+    d = _memory_dir()
     preview = build_memory_block()
-    print(f"Memory block: {len(preview)} chars, starts with:")
-    print(preview[:300])
+    print(f"\nActive memory dir: {d}")
+    print(f"Memory block: {len(preview)} chars")
     print("\nAll memory_store self-tests passed")

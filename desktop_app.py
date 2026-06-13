@@ -21,6 +21,7 @@ from backend.grok_client import (
     refine_transcript,
 )
 from backend.memory_store import ensure_memory_files
+from backend import profile_store
 
 # UI default for the Groq/Ollama toggle, driven by LLM_PROVIDER in .env
 DEFAULT_LLM_MODE = "groq" if LLM_PROVIDER == "groq" else "ollama"
@@ -174,6 +175,36 @@ class AICoplotPro:
             font=("Segoe UI", 8),
         ).pack(side=tk.LEFT, padx=2)
 
+        # Profile selector (each profile has its own isolated local memory)
+        profile_store.ensure_default_profile()
+        tk.Label(
+            ctrl,
+            text="Profile:",
+            bg="#2a2a3e",
+            fg="#fff",
+            font=("Segoe UI", 9),
+        ).pack(side=tk.LEFT, padx=(10, 2))
+
+        self.profile_combo = ttk.Combobox(
+            ctrl, width=12, state="readonly", font=("Segoe UI", 8)
+        )
+        self.profile_combo.pack(side=tk.LEFT, padx=2)
+        self.profile_combo.bind("<<ComboboxSelected>>", self._on_profile_selected)
+
+        tk.Button(
+            ctrl,
+            text="Add Profile",
+            bg="#4a4a5e",
+            fg="#fff",
+            font=("Segoe UI", 8),
+            relief=tk.FLAT,
+            cursor="hand2",
+            command=self._add_profile,
+        ).pack(side=tk.LEFT, padx=2)
+
+        self._profile_ids = []
+        self._refresh_profiles()
+
         # Persona selector
         tk.Label(
             ctrl,
@@ -191,7 +222,7 @@ class AICoplotPro:
             "rami_ai_engineer": "Rami - AI Engineer",
             "rami_ai_interview": "Rami - AI Interview",
             "rami_fullstack_interview": "Rami - Full-Stack Interview",
-            "rami_interview_memory": "Rami - Interview (Memory)",
+            "rami_interview_memory": "Interview (Memory)",
             "call_center_professional": "Call Center Pro (38yr)",
             "call_center_learner": "Call Center Learner (18yr)",
             "custom": "Custom Prompt"
@@ -493,6 +524,64 @@ class AICoplotPro:
             # Update device label
             device_name = self.capture.device_info.get("name", "Unknown")
             self.device_lbl.config(text=f"Device: {device_name[:30]}")
+
+    def _refresh_profiles(self):
+        """Reload the profile dropdown and select the active profile"""
+        profiles = profile_store.list_profiles()
+        self._profile_ids = [p["id"] for p in profiles]
+        self.profile_combo["values"] = [p["display_name"] for p in profiles]
+        try:
+            active = profile_store.get_active_profile_id()
+        except ValueError:
+            # No unambiguous active profile - require explicit selection
+            active = None
+            self.profile_combo.set("")
+            print("[PROFILE] Please select a profile before using profile memory.")
+        if active in self._profile_ids:
+            self.profile_combo.current(self._profile_ids.index(active))
+
+    def _on_profile_selected(self, event=None):
+        """Switch the active profile - memory follows immediately"""
+        idx = self.profile_combo.current()
+        if idx < 0 or idx >= len(self._profile_ids):
+            return
+        profile_id = self._profile_ids[idx]
+        try:
+            profile_store.set_active_profile_id(profile_id)
+            ensure_memory_files(profile_id)
+            print(f"[PROFILE] Active profile: {profile_id}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not switch profile: {e}")
+            self._refresh_profiles()
+
+    def _add_profile(self):
+        """Create a new profile with blank private memory and select it"""
+        name = simpledialog.askstring(
+            "Add Profile",
+            "Profile name (e.g. a first name):",
+            parent=self.root,
+        )
+        if name is None:
+            return
+        try:
+            profile = profile_store.create_profile(name)
+            ensure_memory_files(profile["id"])
+            profile_store.set_active_profile_id(profile["id"])
+            self._refresh_profiles()
+            print(f"[PROFILE] Created and selected: {profile['id']}")
+            messagebox.showinfo(
+                "Profile Created",
+                f"Profile '{profile['display_name']}' created and selected.\n\n"
+                f"Its private memory files are in:\n"
+                f"data/profiles/{profile['id']}/memory\n\n"
+                "Fill those files in before using the Interview (Memory) "
+                "persona - until then it will say that profile details "
+                "have not been added yet.",
+            )
+        except ValueError as e:
+            messagebox.showerror("Cannot Create Profile", str(e))
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not create profile: {e}")
 
     def _open_custom_prompt_editor(self):
         """Open popup window to edit custom prompt"""
@@ -1476,10 +1565,11 @@ def main():
     # Setup
     os.makedirs("data", exist_ok=True)
 
-    # Interview memory files (templates created once, never overwritten)
+    # Profiles + interview memory (templates created once, never overwritten)
+    active = profile_store.ensure_default_profile()
     created = ensure_memory_files()
     if created:
-        print(f"Created memory templates in data/memory: {', '.join(created)}")
+        print(f"Created memory templates for profile '{active}': {', '.join(created)}")
 
     # User selection
     username = "default"

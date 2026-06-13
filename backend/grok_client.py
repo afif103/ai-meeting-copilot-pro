@@ -27,11 +27,21 @@ try:
 except ImportError:
     print("[WARN] python-dotenv not installed. Using environment variables only.")
 
-# Interview memory (local files in data/memory) - see backend/memory_store.py
+# Interview memory (per-profile local files) - see backend/memory_store.py
 try:
-    from backend.memory_store import build_memory_block
+    from backend.memory_store import build_memory_block, has_profile_facts
 except ImportError:
-    from memory_store import build_memory_block
+    from memory_store import build_memory_block, has_profile_facts
+
+# Deterministic responses for the memory persona when no LLM call should
+# be made (no invented experience, no other profile's memory exposed).
+NO_PROFILE_FACTS_MESSAGE = (
+    "I haven't added my profile or experience details yet, so I can't "
+    "give a personal answer accurately."
+)
+NO_PROFILE_SELECTED_MESSAGE = (
+    "Please select a profile before using profile memory."
+)
 
 # Configuration (now loaded from .env)
 # Provider: "ollama" = local (default), "groq" = cloud (optional)
@@ -291,16 +301,21 @@ Adjustments: {feedback_adj}
 
 Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explanations."""
 
-    # Interview memory: only personas containing {memory} use it; facts
-    # come from local files in data/memory (see backend/memory_store.py)
+    # Interview memory: only personas containing {memory} use it. FAIL
+    # CLOSED: when no profile is selected or the profile has no personal
+    # facts, a deterministic message is used and NO LLM call is made -
+    # the model never gets a chance to invent experience.
     memory_block = ""
+    memory_gate_message = None
     if "{memory}" in persona_prompt:
         try:
-            memory_block = build_memory_block()
+            if not has_profile_facts():
+                memory_gate_message = NO_PROFILE_FACTS_MESSAGE
+            else:
+                memory_block = build_memory_block()
         except Exception as e:
-            logger.error(f" Memory load failed: {e}")
-            memory_block = ("(Memory unavailable. Answer from general "
-                            "experience; do not invent specifics.)")
+            logger.error(f" Profile memory unavailable: {e}")
+            memory_gate_message = NO_PROFILE_SELECTED_MESSAGE
 
     # Build final prompt by replacing placeholders in persona prompt
     # (extra kwargs are safe: str.format ignores unused keyword arguments)
@@ -317,6 +332,10 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
     # The memory persona must be literal, not creative: low temperature
     # reduces invented details. Other personas keep the original 0.5.
     suggest_temperature = 0.2 if "{memory}" in persona_prompt else 0.5
+
+    if memory_gate_message:
+        yield memory_gate_message
+        return
 
     if use_ollama:
         # Native Ollama streaming - tokens arrive as Ollama generates them
@@ -428,16 +447,21 @@ Adjustments: {feedback_adj}
 
 Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explanations."""
 
-    # Interview memory: only personas containing {memory} use it; facts
-    # come from local files in data/memory (see backend/memory_store.py)
+    # Interview memory: only personas containing {memory} use it. FAIL
+    # CLOSED: when no profile is selected or the profile has no personal
+    # facts, a deterministic message is used and NO LLM call is made -
+    # the model never gets a chance to invent experience.
     memory_block = ""
+    memory_gate_message = None
     if "{memory}" in persona_prompt:
         try:
-            memory_block = build_memory_block()
+            if not has_profile_facts():
+                memory_gate_message = NO_PROFILE_FACTS_MESSAGE
+            else:
+                memory_block = build_memory_block()
         except Exception as e:
-            logger.error(f" Memory load failed: {e}")
-            memory_block = ("(Memory unavailable. Answer from general "
-                            "experience; do not invent specifics.)")
+            logger.error(f" Profile memory unavailable: {e}")
+            memory_gate_message = NO_PROFILE_SELECTED_MESSAGE
 
     # Build final prompt by replacing placeholders in persona prompt
     # (extra kwargs are safe: str.format ignores unused keyword arguments)
@@ -454,6 +478,9 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
     # The memory persona must be literal, not creative: low temperature
     # reduces invented details. Other personas keep the original 0.5.
     suggest_temperature = 0.2 if "{memory}" in persona_prompt else 0.5
+
+    if memory_gate_message:
+        return memory_gate_message
 
     if use_ollama:
         return _call_ollama(
