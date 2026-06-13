@@ -21,7 +21,7 @@ from backend.grok_client import (
     refine_transcript,
 )
 from backend.memory_store import ensure_memory_files
-from backend import profile_store
+from backend import mode_store, profile_store
 
 # UI default for the Groq/Ollama toggle, driven by LLM_PROVIDER in .env
 DEFAULT_LLM_MODE = "groq" if LLM_PROVIDER == "groq" else "ollama"
@@ -202,8 +202,25 @@ class AICoplotPro:
             command=self._add_profile,
         ).pack(side=tk.LEFT, padx=2)
 
+        # Mode selector (per-profile: each profile remembers its own mode)
+        tk.Label(
+            ctrl,
+            text="Mode:",
+            bg="#2a2a3e",
+            fg="#fff",
+            font=("Segoe UI", 9),
+        ).pack(side=tk.LEFT, padx=(8, 2))
+
+        self.mode_combo = ttk.Combobox(
+            ctrl, width=20, state="readonly", font=("Segoe UI", 8)
+        )
+        self.mode_combo.pack(side=tk.LEFT, padx=2)
+        self.mode_combo.bind("<<ComboboxSelected>>", self._on_mode_selected)
+
         self._profile_ids = []
+        self._mode_ids = []
         self._refresh_profiles()
+        self._refresh_modes()
 
         # Persona selector
         tk.Label(
@@ -222,7 +239,7 @@ class AICoplotPro:
             "rami_ai_engineer": "Rami - AI Engineer",
             "rami_ai_interview": "Rami - AI Interview",
             "rami_fullstack_interview": "Rami - Full-Stack Interview",
-            "rami_interview_memory": "Interview (Memory)",
+            "rami_interview_memory": "Profile Copilot (Memory)",
             "call_center_professional": "Call Center Pro (38yr)",
             "call_center_learner": "Call Center Learner (18yr)",
             "custom": "Custom Prompt"
@@ -263,6 +280,9 @@ class AICoplotPro:
                 self.edit_prompt_btn.config(bg="#4a4a5e")
 
         self.persona_var.trace('w', update_persona_display)
+
+        # Now that the persona selector exists, sync it to the saved mode
+        self._apply_mode_persona()
 
         # Action buttons
         btn_frm = tk.Frame(ctrl, bg="#2a2a3e")
@@ -541,7 +561,7 @@ class AICoplotPro:
             self.profile_combo.current(self._profile_ids.index(active))
 
     def _on_profile_selected(self, event=None):
-        """Switch the active profile - memory follows immediately"""
+        """Switch the active profile - memory and saved mode follow immediately"""
         idx = self.profile_combo.current()
         if idx < 0 or idx >= len(self._profile_ids):
             return
@@ -553,6 +573,58 @@ class AICoplotPro:
         except Exception as e:
             messagebox.showerror("Error", f"Could not switch profile: {e}")
             self._refresh_profiles()
+        self._refresh_modes()
+
+    def _refresh_modes(self):
+        """Reload the mode dropdown to the active profile's saved mode"""
+        modes = mode_store.list_modes()
+        self._mode_ids = [m["id"] for m in modes]
+        self.mode_combo["values"] = [m["name"] for m in modes]
+        try:
+            current = profile_store.get_profile_mode()
+        except ValueError:
+            # No active profile selected yet - leave the mode unselected
+            self.mode_combo.set("")
+            return
+        if current in self._mode_ids:
+            self.mode_combo.current(self._mode_ids.index(current))
+        else:
+            self.mode_combo.current(
+                self._mode_ids.index(mode_store.DEFAULT_MODE_ID)
+            )
+        self._apply_mode_persona()
+
+    def _apply_mode_persona(self):
+        """Sync the persona to the active profile's mode.
+
+        Standard modes drive the generic memory persona; Custom mode
+        drives the existing custom-prompt persona. Users can still pick
+        old personas manually afterward.
+        """
+        if not hasattr(self, "persona_var"):
+            return  # UI still building - applied again once persona exists
+        try:
+            mode_id = profile_store.get_profile_mode()
+        except ValueError:
+            return
+        persona = "custom" if mode_id == "custom" else "rami_interview_memory"
+        if self.persona_var.get() != persona:
+            self.persona_var.set(persona)
+            print(f"[MODE] Persona set to '{persona}' for mode '{mode_id}'")
+
+    def _on_mode_selected(self, event=None):
+        """Save the selected mode for the active profile - applies immediately"""
+        idx = self.mode_combo.current()
+        if idx < 0 or idx >= len(self._mode_ids):
+            return
+        try:
+            profile_store.set_profile_mode(self._mode_ids[idx])
+            print(f"[MODE] {self._mode_ids[idx]}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not set mode: {e}")
+            self._refresh_modes()
+            return
+        self._apply_mode_persona()
 
     def _add_profile(self):
         """Create a new profile with blank private memory and select it"""
@@ -568,15 +640,16 @@ class AICoplotPro:
             ensure_memory_files(profile["id"])
             profile_store.set_active_profile_id(profile["id"])
             self._refresh_profiles()
+            self._refresh_modes()
             print(f"[PROFILE] Created and selected: {profile['id']}")
             messagebox.showinfo(
                 "Profile Created",
                 f"Profile '{profile['display_name']}' created and selected.\n\n"
                 f"Its private memory files are in:\n"
                 f"data/profiles/{profile['id']}/memory\n\n"
-                "Fill those files in before using the Interview (Memory) "
-                "persona - until then it will say that profile details "
-                "have not been added yet.",
+                "Fill those files in before using an interview mode - "
+                "until then the Profile Copilot will say that profile "
+                "details have not been added yet.",
             )
         except ValueError as e:
             messagebox.showerror("Cannot Create Profile", str(e))

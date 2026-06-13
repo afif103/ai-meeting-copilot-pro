@@ -195,6 +195,64 @@ def set_active_profile_id(profile_id):
         _save_registry(reg)
 
 
+DEFAULT_MODE_ID = "general_interview"
+
+
+def _is_known_mode(mode_id):
+    """Check a mode id against the mode registry (local import - no cycle)."""
+    try:
+        from backend import mode_store
+    except ImportError:
+        try:
+            import mode_store
+        except ImportError:
+            return True  # mode system absent - accept (legacy tolerance)
+    return mode_store.get_mode(mode_id)["id"] == mode_id
+
+
+def get_profile_mode(profile_id=None):
+    """Selected mode id for a profile (None = active profile).
+
+    Stored per profile, so switching profiles restores each person's own
+    mode. Profiles without a saved mode default to the general interview.
+    A corrupted/unknown saved mode is repaired to the general default -
+    mode corruption is not identity corruption, so no fail-closed here.
+    """
+    if profile_id is None:
+        profile_id = get_active_profile_id()
+    reg = _load_registry()
+    if profile_id not in reg["profiles"]:
+        raise ValueError(f"Unknown profile: {profile_id!r}")
+    saved = reg["profiles"][profile_id].get("mode", DEFAULT_MODE_ID)
+    if not _is_known_mode(saved):
+        print(f"[WARN] Profile '{profile_id}' had unknown mode "
+              f"{saved!r} - repaired to '{DEFAULT_MODE_ID}'")
+        reg["profiles"][profile_id]["mode"] = DEFAULT_MODE_ID
+        _save_registry(reg)
+        saved = DEFAULT_MODE_ID
+    return saved
+
+
+def set_profile_mode(mode_id, profile_id=None):
+    """Save the selected mode for a profile (None = active profile).
+
+    Unknown mode ids are rejected with a clear ValueError.
+    """
+    if not isinstance(mode_id, str) or not mode_id.strip():
+        raise ValueError("Mode id cannot be empty.")
+    mode_id = mode_id.strip()
+    if not _is_known_mode(mode_id):
+        raise ValueError(f"Unknown mode: {mode_id!r}")
+    if profile_id is None:
+        profile_id = get_active_profile_id()
+    reg = _load_registry()
+    if profile_id not in reg["profiles"]:
+        raise ValueError(f"Unknown profile: {profile_id!r}")
+    if reg["profiles"][profile_id].get("mode") != mode_id:
+        reg["profiles"][profile_id]["mode"] = mode_id
+        _save_registry(reg)
+
+
 def ensure_default_profile():
     """First-run setup: create the default profile and migrate legacy memory.
 

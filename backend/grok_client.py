@@ -30,8 +30,12 @@ except ImportError:
 # Interview memory (per-profile local files) - see backend/memory_store.py
 try:
     from backend.memory_store import build_memory_block, has_profile_facts
+    from backend.mode_store import get_mode
+    from backend.profile_store import get_profile_mode
 except ImportError:
     from memory_store import build_memory_block, has_profile_facts
+    from mode_store import get_mode
+    from profile_store import get_profile_mode
 
 # Deterministic responses for the memory persona when no LLM call should
 # be made (no invented experience, no other profile's memory exposed).
@@ -302,17 +306,23 @@ Adjustments: {feedback_adj}
 Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explanations."""
 
     # Interview memory: only personas containing {memory} use it. FAIL
-    # CLOSED: when no profile is selected or the profile has no personal
-    # facts, a deterministic message is used and NO LLM call is made -
-    # the model never gets a chance to invent experience.
+    # CLOSED: when no profile is selected, or the profile has no personal
+    # facts and the selected mode requires them, a deterministic message
+    # is used and NO LLM call is made - the model never gets a chance to
+    # invent experience. Mode behavior comes from backend/mode_store.py.
     memory_block = ""
     memory_gate_message = None
+    mode_instructions = ""
     if "{memory}" in persona_prompt:
         try:
-            if not has_profile_facts():
+            mode = get_mode(get_profile_mode())  # active profile's mode
+            mode_instructions = mode["instructions"]
+            if mode["requires_facts"] and not has_profile_facts():
                 memory_gate_message = NO_PROFILE_FACTS_MESSAGE
             else:
-                memory_block = build_memory_block()
+                memory_block = build_memory_block(
+                    include_job_description=mode["uses_job_description"]
+                )
         except Exception as e:
             logger.error(f" Profile memory unavailable: {e}")
             memory_gate_message = NO_PROFILE_SELECTED_MESSAGE
@@ -323,7 +333,8 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
         context_summary=context_summary,
         snippet=snippet,
         feedback_adj=feedback_adj,
-        memory=memory_block
+        memory=memory_block,
+        mode_instructions=mode_instructions
     )
 
     # Interview persona needs more tokens for complete answers
@@ -448,17 +459,23 @@ Adjustments: {feedback_adj}
 Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explanations."""
 
     # Interview memory: only personas containing {memory} use it. FAIL
-    # CLOSED: when no profile is selected or the profile has no personal
-    # facts, a deterministic message is used and NO LLM call is made -
-    # the model never gets a chance to invent experience.
+    # CLOSED: when no profile is selected, or the profile has no personal
+    # facts and the selected mode requires them, a deterministic message
+    # is used and NO LLM call is made - the model never gets a chance to
+    # invent experience. Mode behavior comes from backend/mode_store.py.
     memory_block = ""
     memory_gate_message = None
+    mode_instructions = ""
     if "{memory}" in persona_prompt:
         try:
-            if not has_profile_facts():
+            mode = get_mode(get_profile_mode())  # active profile's mode
+            mode_instructions = mode["instructions"]
+            if mode["requires_facts"] and not has_profile_facts():
                 memory_gate_message = NO_PROFILE_FACTS_MESSAGE
             else:
-                memory_block = build_memory_block()
+                memory_block = build_memory_block(
+                    include_job_description=mode["uses_job_description"]
+                )
         except Exception as e:
             logger.error(f" Profile memory unavailable: {e}")
             memory_gate_message = NO_PROFILE_SELECTED_MESSAGE
@@ -469,7 +486,8 @@ Deliver ONLY the final answer. No markdown. No quotes. No formatting. No explana
         context_summary=context_summary,
         snippet=snippet,
         feedback_adj=feedback_adj,
-        memory=memory_block
+        memory=memory_block,
+        mode_instructions=mode_instructions
     )
 
     # Interview persona needs more tokens for complete answers

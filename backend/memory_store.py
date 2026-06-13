@@ -248,10 +248,12 @@ def _truncate(text, cap):
     return text[:cut].rstrip() + "\n[...truncated...]"
 
 
-def _load_filled_sections(mem_dir):
+def _load_filled_sections(mem_dir, include_job_description=True):
     """Return (title, content) for files that are filled in (no marker)."""
     sections = []
     for spec in MEMORY_FILES:
+        if spec["filename"] == "job_description.md" and not include_job_description:
+            continue  # non-interview modes must not see old job postings
         path = mem_dir / spec["filename"]
         try:
             content = path.read_text(encoding="utf-8").strip()
@@ -286,21 +288,25 @@ def _dir_stamp(mem_dir):
     return tuple(stamp)
 
 
-def build_memory_block(profile_id=None, max_chars=None):
+def build_memory_block(profile_id=None, max_chars=None, include_job_description=True):
     """Build the memory text injected into {memory} persona prompts.
 
     profile_id None = the active profile; max_chars None = default budget.
+    include_job_description False drops job_description.md (used by
+    non-interview modes - see backend/mode_store.py uses_job_description).
     """
     if max_chars is None:
         max_chars = DEFAULT_MEMORY_BUDGET
     mem_dir = _memory_dir(profile_id)
     _ensure_files_in(mem_dir)
 
-    stamp = (_dir_stamp(mem_dir), max_chars)
+    # The flag is part of the cache stamp so switching modes can never
+    # reuse a block built with the wrong job-description setting.
+    stamp = (_dir_stamp(mem_dir), max_chars, include_job_description)
     if _cache["stamp"] == stamp:
         return _cache["block"]
 
-    sections = _load_filled_sections(mem_dir)
+    sections = _load_filled_sections(mem_dir, include_job_description)
     if not sections:
         block = _EMPTY_MEMORY_NOTE
     else:

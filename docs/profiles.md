@@ -9,8 +9,8 @@ asks for or stores relationship labels.
 
 - The **Profile** dropdown in the top bar shows all profiles. Selecting
   one switches the active profile immediately — no restart needed. The
-  memory persona ("Rami - Interview (Memory)" style) reads the selected
-  profile's memory from the very next suggestion.
+  Profile Copilot (Memory) persona reads the selected profile's memory
+  from the very next suggestion.
 - **Add Profile** asks for a display name, creates the profile with blank
   guided memory templates, and selects it. Invalid names (empty, or
   nothing usable in them) show an error. Names must be unique — "Rami"
@@ -50,7 +50,34 @@ untouched as a backup — nothing is deleted or modified. The migration
 runs once (a flag in `profiles.json` remembers it) and never overwrites
 files that already exist in the profile.
 
-## What's coming separately
+## Modes
 
-Role/mode selection (interview vs. call-center vs. meeting assistance,
-etc.) is a separate planned feature and is not part of profiles.
+The **Mode** dropdown (next to Profile) controls what kind of help you
+get. Selecting a standard mode automatically activates the generic
+**Profile Copilot (Memory)** persona; selecting **Custom** activates the
+existing Custom Prompt persona (Edit button). Each profile remembers its
+own mode — switching profiles restores that person's last selection and
+the matching persona. You can still pick an old persona manually
+afterward.
+
+Job descriptions (`job_description.md`) are used **only by interview
+modes** — Meeting / Discussion Copilot and Work Assistant never receive
+old interview job postings in their context.
+
+| Mode | What it does | Needs filled memory? |
+|------|--------------|----------------------|
+| General Interview | Standard professional interview answers | Yes |
+| Call Center Interview | Simple spoken English, customer-service mindset | Yes |
+| Virtual Assistant Interview | Organization/communication/admin emphasis | Yes |
+| Technical Interview | Direct answers with trade-offs (previous default behavior) | Yes |
+| Meeting / Discussion Copilot | Concise responses, topic summaries, follow-ups | No (profile must be selected) |
+| Work Assistant | Draft replies, clarify instructions, organize tasks | No (profile must be selected) |
+| Custom | Neutral behavior for use with your own custom prompt | No |
+
+Interview modes keep the safety rule: with no filled memory files the
+persona answers deterministically that profile details have not been
+added yet — it never invents experience. No mode ever claims experience,
+tools, or employers that are not in the profile's memory files.
+
+Conversation/meeting auto-memory is a separate planned feature — modes do
+not save anything automatically yet.
