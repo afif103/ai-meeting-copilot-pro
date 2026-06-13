@@ -50,13 +50,46 @@ can reopen it from Session History and click **Retry Summary**. Retrying
 can turn a failed session into a complete one without re-saving the
 transcript.
 
-## Suggested memory updates
+## Suggested memory updates — review and approve
 
 The summary may include a **Suggested memory updates** section. These are
-**proposals only** — nothing is added to your permanent profile memory in
-this version. Reviewing and approving them into memory is a separate,
-later feature (Packet 7B). They are stored only inside that session's
-`summary.json`.
+**proposals only** — nothing reaches your permanent profile memory until
+you explicitly approve it, one item at a time.
+
+In a completed session's review window, click **Review Memory
+Suggestions** to open the per-item review:
+
+- Each proposal is shown separately with its category, confidence,
+  reason, the original suggestion, and an **editable** approved text box.
+- **Approve** writes only that one item, after a confirmation, to the
+  mapped memory file of the current profile. **The edited text is what
+  gets saved** — edit before approving if you want to change the wording.
+- **Reject** writes nothing. **Reset to Pending** returns a rejected or
+  pending item to pending.
+- There is **no "approve all"** — every item needs its own decision.
+- Approved items show **Applied** and cannot be applied again. Decisions
+  persist across restarts.
+
+Approved entries are appended (never overwriting existing content) in a
+traceable block that records the source session and proposal:
+
+```
+## Memory update — <UTC date>
+
+- Source session: <session-id>
+- Proposal: <proposal-id>
+- Text: <approved or edited text>
+```
+
+Approved meeting/work memory goes to neutral per-profile files
+(`decisions.md`, `ongoing_tasks.md`, `preferences.md`, `notes.md`,
+`project_context.md`); a person/role note goes to `career_profile.md`.
+Once approved, the Profile Copilot can use the new memory immediately.
+
+**Privacy still applies:** only approve facts you are allowed to keep.
+Approving into one profile never touches another profile's memory, and if
+you switch profiles the review actions are blocked until you switch back
+to the session's own profile.
 
 ## Relationship to Save / Load
 

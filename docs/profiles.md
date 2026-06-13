@@ -86,6 +86,10 @@ not save anything automatically yet.
 
 You can explicitly save a transcript under your profile and generate a
 local structured summary — see [session-archive.md](session-archive.md).
-Saving is always a manual action, sessions are isolated per profile, and
-suggested memory updates are proposals only (nothing is written to
-permanent memory yet).
+Saving is always a manual action and sessions are isolated per profile.
+
+A completed summary's suggested memory updates are **proposals only**:
+you review each one and **explicitly approve, edit, or reject** it before
+anything is written to permanent memory. There is no automatic approval
+and no "approve all" — and approving only ever writes into the session's
+own profile. See [session-archive.md](session-archive.md) for details.

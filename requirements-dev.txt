@@ -1,0 +1,10 @@
+# Development/test dependencies (single source of truth for running the
+# tests). Install with:  pip install -r requirements-dev.txt
+#
+# These are intentionally lightweight: the session-archive / memory-review
+# tests under tests/ are pure-stdlib backend tests plus optional Tkinter UI
+# tests (auto-skipped headless). They do NOT need the heavy desktop/ML
+# stack (faster-whisper, chromadb, torch, sounddevice, ...).
+pytest>=7
+requests
+python-dotenv

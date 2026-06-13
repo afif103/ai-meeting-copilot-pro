@@ -21,7 +21,14 @@ from backend.grok_client import (
     refine_transcript,
 )
 from backend.memory_store import ensure_memory_files
-from backend import mode_store, profile_store, session_store, session_summary
+from backend import (
+    memory_review,
+    mode_store,
+    profile_store,
+    session_store,
+    session_summary,
+    window_registry,
+)
 
 # UI default for the Groq/Ollama toggle, driven by LLM_PROVIDER in .env
 DEFAULT_LLM_MODE = "groq" if LLM_PROVIDER == "groq" else "ollama"
@@ -69,6 +76,10 @@ class AICoplotPro:
         # drains the queue so worker threads never touch Tkinter.
         self._summary_queue = queue.Queue()
         self._summary_poller_on = False
+
+        # Tracks profile-bound review windows so they close on a profile
+        # switch (close logic is GUI-agnostic and unit-tested headlessly).
+        self._review_windows = window_registry.WindowRegistry()
 
         # Performance metrics
         self.metrics = {
@@ -617,6 +628,7 @@ class AICoplotPro:
             messagebox.showerror("Error", f"Could not switch profile: {e}")
             self._refresh_profiles()
         self._refresh_modes()
+        self._close_foreign_archive_windows()
         self._refresh_history_window()
 
     def _refresh_modes(self):
@@ -785,12 +797,36 @@ class AICoplotPro:
             pass
         self.root.after(150, self._poll_summary_queue)
 
+    def _active_profile_or_none(self):
+        try:
+            return profile_store.get_active_profile_id()
+        except ValueError:
+            return None
+
     def _is_active_profile(self, profile_id):
         """True only if profile_id is the currently selected profile."""
-        try:
-            return profile_store.get_active_profile_id() == profile_id
-        except ValueError:
-            return False  # no active profile selected
+        return window_registry.owner_is_active(
+            self._active_profile_or_none(), profile_id)
+
+    def _register_archive_window(self, win, owner_profile_id):
+        """Track a profile-bound review window (close logic lives in
+        backend.window_registry, unit-tested headlessly)."""
+        win._owner_profile_id = owner_profile_id
+        self._review_windows.register(win, owner_profile_id)
+
+    def _close_foreign_archive_windows(self):
+        """Close every review window that does not belong to the active
+        profile - never show one profile's session content under another.
+        If any window cannot be closed or hidden, warn rather than leave
+        the privacy failure silent."""
+        failures = self._review_windows.close_foreign(
+            self._active_profile_or_none())
+        if failures:
+            messagebox.showwarning(
+                "Privacy Warning",
+                f"Could not close {len(failures)} review window(s) from "
+                "another profile. Please close them manually before "
+                "continuing.")
 
     def _mode_label(self, mode_id):
         """Display name for a (possibly old/removed) stored mode id."""
@@ -877,11 +913,26 @@ class AICoplotPro:
             return
         meta, summary = data["metadata"], data["summary"]
 
+        # Register the window IMMEDIATELY, before inserting any profile
+        # content, so a rendering failure can never leave an untracked
+        # window holding this profile's data. Everything after is guarded.
         win = tk.Toplevel(self.root)
-        win.title(f"Session Review - {meta.get('title', session_id)}")
-        win.geometry("760x560")
-        win.configure(bg="#1e1e2e")
+        self._register_archive_window(win, profile_id)
+        try:
+            win.title(f"Session Review - {meta.get('title', session_id)}")
+            win.geometry("760x560")
+            win.configure(bg="#1e1e2e")
+            return self._build_session_review(win, session_id, profile_id,
+                                              meta, summary)
+        except Exception as e:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            messagebox.showerror("Error", f"Could not open session: {e}")
+            return None
 
+    def _build_session_review(self, win, session_id, profile_id, meta, summary):
         text = scrolledtext.ScrolledText(
             win, wrap=tk.WORD, font=("Segoe UI", 10),
             bg="#2b2b3e", fg="#e0e0e0", padx=12, pady=12,
@@ -920,14 +971,24 @@ class AICoplotPro:
             except Exception as e:
                 messagebox.showerror("Error", str(e), parent=win)
                 return
+            # Register the transcript popup under the SAME owning profile
+            # so it is included in profile-switch cleanup.
             tw = tk.Toplevel(win)
-            tw.title(f"Transcript - {meta.get('title', session_id)}")
-            tw.geometry("700x500")
-            box = scrolledtext.ScrolledText(tw, wrap=tk.WORD,
-                                            font=("Consolas", 10))
-            box.pack(fill=tk.BOTH, expand=True)
-            box.insert(tk.END, t)
-            box.config(state=tk.DISABLED)
+            self._register_archive_window(tw, profile_id)
+            try:
+                tw.title(f"Transcript - {meta.get('title', session_id)}")
+                tw.geometry("700x500")
+                box = scrolledtext.ScrolledText(tw, wrap=tk.WORD,
+                                                font=("Consolas", 10))
+                box.pack(fill=tk.BOTH, expand=True)
+                box.insert(tk.END, t)
+                box.config(state=tk.DISABLED)
+            except Exception as e:
+                try:
+                    tw.destroy()
+                except Exception:
+                    pass
+                messagebox.showerror("Error", str(e), parent=win)
 
         retry_guard = {"running": False}
 
@@ -976,6 +1037,14 @@ class AICoplotPro:
         tk.Button(btns, text="Open Transcript", command=open_transcript,
                   bg="#4a4a5e", fg="white", **btn_style).pack(
             side=tk.LEFT, padx=4)
+        # Memory review only when complete AND there are suggestions.
+        has_suggestions = bool(
+            summary and summary.get("suggested_memory_updates"))
+        if status == "complete" and has_suggestions:
+            tk.Button(
+                btns, text="Review Memory Suggestions",
+                command=lambda: self._open_memory_review(session_id, profile_id),
+                bg="#6f42c1", fg="white", **btn_style).pack(side=tk.LEFT, padx=4)
         # Retry is available whenever there is no completed summary.
         if status in ("failed", "pending"):
             tk.Button(btns, text="Retry Summary", command=retry_summary,
@@ -984,6 +1053,178 @@ class AICoplotPro:
         tk.Button(btns, text="Close", command=win.destroy,
                   bg="#6c757d", fg="white", **btn_style).pack(
             side=tk.LEFT, padx=4)
+        return win
+
+    def _open_memory_review(self, session_id, profile_id):
+        """Per-item review of a session's suggested memory updates.
+
+        Each proposal is approved/rejected individually and explicitly;
+        there is no 'approve all'. Approving writes only that item, and
+        only into the OWNING profile's memory."""
+        # Register the window IMMEDIATELY, before loading proposals or
+        # rendering any profile content, so a failure can never leave an
+        # untracked window. Everything after is guarded.
+        win = tk.Toplevel(self.root)
+        self._register_archive_window(win, profile_id)
+        try:
+            win.title("Review Memory Suggestions")
+            win.geometry("720x600")
+            win.configure(bg="#1e1e2e")
+            return self._build_memory_review(win, session_id, profile_id)
+        except Exception as e:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            messagebox.showerror("Error", f"Could not open review: {e}")
+            return None
+
+    def _build_memory_review(self, win, session_id, profile_id):
+        proposals = memory_review.build_proposals(session_id, profile_id)
+        prof = profile_store.get_profile(profile_id) or {}
+        prof_name = prof.get("display_name", profile_id)
+
+        # Per-window widget map (proposal_id -> Text). NOT app-global, so a
+        # second review window reusing ids like 'p001-...' cannot change
+        # which edited text this window approves.
+        win._text_widgets = {}
+
+        tk.Label(
+            win,
+            text=f"Profile: {prof_name}   -   Suggestions only; each item is "
+                 "saved to permanent memory only when you approve it.",
+            bg="#1e1e2e", fg="#9fd6ff", font=("Segoe UI", 9),
+            wraplength=700,
+        ).pack(pady=(8, 4), padx=8)
+
+        # Scrollable proposal area
+        canvas = tk.Canvas(win, bg="#1e1e2e", highlightthickness=0)
+        scroll = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        body = tk.Frame(canvas, bg="#1e1e2e")
+        body.bind("<Configure>",
+                  lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=body, anchor="nw", width=690)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=4)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def owner_active_ok():
+            if not self._is_active_profile(profile_id):
+                messagebox.showwarning(
+                    "Different Profile",
+                    "Switch back to the session's profile before reviewing "
+                    "its memory suggestions.", parent=win)
+                return False
+            return True
+
+        def do_approve(pid):
+            if not owner_active_ok():
+                return
+            widget = win._text_widgets.get(pid)
+            edited = widget.get("1.0", tk.END).strip() if widget else ""
+            if not edited:
+                messagebox.showerror("Empty Text",
+                                     "Approved text cannot be empty.",
+                                     parent=win)
+                return
+            if not messagebox.askokcancel(
+                "Approve to Permanent Memory",
+                f"This will add the approved text to permanent memory for "
+                f"profile {prof_name}.", parent=win):
+                return
+            try:
+                memory_review.set_edited_text(session_id, pid, edited, profile_id)
+                memory_review.approve_proposal(session_id, pid, profile_id)
+            except Exception as e:
+                messagebox.showerror("Error", str(e), parent=win)
+            render()
+
+        def do_reject(pid):
+            if not owner_active_ok():
+                return
+            try:
+                memory_review.reject_proposal(session_id, pid, profile_id)
+            except Exception as e:
+                messagebox.showerror("Error", str(e), parent=win)
+            render()
+
+        def do_reset(pid):
+            if not owner_active_ok():
+                return
+            try:
+                memory_review.reset_proposal(session_id, pid, profile_id)
+            except Exception as e:
+                messagebox.showerror("Error", str(e), parent=win)
+            render()
+
+        win._approve, win._reject, win._reset = do_approve, do_reject, do_reset
+
+        def render():
+            nonlocal proposals
+            proposals = memory_review.build_proposals(session_id, profile_id)
+            for child in body.winfo_children():
+                child.destroy()
+            win._text_widgets = {}
+            self._refresh_history_window()
+            if not proposals:
+                tk.Label(body, text="(no suggestions)", bg="#1e1e2e",
+                         fg="#aaa").pack(pady=10)
+                return
+            for p in proposals:
+                applied = bool(p["applied_at_utc"])
+                status_txt = ("Applied" if applied
+                              else p["decision"].capitalize())
+                lf = tk.LabelFrame(
+                    body,
+                    text=f"  {p['category']}  |  confidence: {p['confidence']}"
+                         f"  |  -> {p['target_file']}  |  {status_txt}  ",
+                    bg="#2b2b3e", fg="#e0e0e0", font=("Segoe UI", 9, "bold"),
+                    padx=8, pady=6)
+                lf.pack(fill=tk.X, padx=6, pady=5)
+                if p["reason"]:
+                    tk.Label(lf, text=f"Reason: {p['reason']}", bg="#2b2b3e",
+                             fg="#aaa", font=("Segoe UI", 8), wraplength=640,
+                             justify=tk.LEFT, anchor="w").pack(fill=tk.X)
+                tk.Label(lf, text=f"Original: {p['original_text']}",
+                         bg="#2b2b3e", fg="#9aa", font=("Segoe UI", 8),
+                         wraplength=640, justify=tk.LEFT, anchor="w").pack(
+                    fill=tk.X, pady=(2, 4))
+                txt = tk.Text(lf, height=3, wrap=tk.WORD, font=("Segoe UI", 9),
+                              bg="#1a1a2e", fg="#e0e0e0")
+                txt.insert("1.0", p["edited_text"])
+                txt.pack(fill=tk.X)
+                win._text_widgets[p["proposal_id"]] = txt
+
+                row = tk.Frame(lf, bg="#2b2b3e")
+                row.pack(fill=tk.X, pady=(4, 0))
+                bs = {"font": ("Segoe UI", 8, "bold"), "relief": tk.FLAT,
+                      "cursor": "hand2", "padx": 8}
+                pid = p["proposal_id"]
+                if applied:
+                    txt.config(state=tk.DISABLED)
+                    tk.Label(row, text="Applied to permanent memory",
+                             bg="#2b2b3e", fg="#28a745",
+                             font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
+                else:
+                    tk.Button(row, text="Approve",
+                              command=lambda i=pid: do_approve(i),
+                              bg="#198754", fg="white", **bs).pack(
+                        side=tk.LEFT, padx=3)
+                    tk.Button(row, text="Reject",
+                              command=lambda i=pid: do_reject(i),
+                              bg="#dc3545", fg="white", **bs).pack(
+                        side=tk.LEFT, padx=3)
+                    tk.Button(row, text="Reset to Pending",
+                              command=lambda i=pid: do_reset(i),
+                              bg="#6c757d", fg="white", **bs).pack(
+                        side=tk.LEFT, padx=3)
+
+        win._render = render
+        render()
+
+        tk.Button(win, text="Close", command=win.destroy, bg="#6c757d",
+                  fg="white", font=("Segoe UI", 9), relief=tk.FLAT,
+                  cursor="hand2", padx=12, pady=3).pack(pady=6)
         return win
 
     def _open_session_history(self):

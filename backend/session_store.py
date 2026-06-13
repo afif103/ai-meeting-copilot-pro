@@ -171,6 +171,30 @@ def get_transcript(session_id, profile_id=None):
     return (d / "transcript.txt").read_text(encoding="utf-8")
 
 
+def read_summary_strict(session_id, profile_id=None):
+    """Strictly read summary.json: returns the summary dict, or None if no
+    summary file exists yet (legitimate for a pending/failed session).
+
+    Unlike get_session() (which tolerates a bad summary for display), this
+    RAISES on an unreadable, invalid-JSON, or non-object summary, so
+    callers that must not lose data (memory review) can fail closed."""
+    d, _ = _session_dir(session_id, profile_id)
+    path = d / "summary.json"
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise OSError(f"Could not read summary {path.name}: {e}")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Summary {path.name} is not valid JSON: {e}")
+    if not isinstance(data, dict):
+        raise ValueError(f"Summary {path.name} is not an object.")
+    return data
+
+
 def list_sessions(profile_id=None):
     """All sessions of ONE profile, newest first. Never crosses profiles."""
     root, _ = _sessions_root(profile_id)
@@ -226,3 +250,20 @@ def mark_summary_pending(session_id, profile_id=None):
     """
     return _update_metadata(session_id, profile_id,
                             summary_status="pending", summary_error="")
+
+
+_VALID_MEMORY_STATUSES = {"not_reviewed", "partially_reviewed",
+                          "fully_reviewed"}
+
+
+def set_memory_status(session_id, status, profile_id=None):
+    """Record the memory-review status for a session. Rejects unknowns."""
+    if status not in _VALID_MEMORY_STATUSES:
+        raise ValueError(f"Invalid memory status: {status!r}")
+    return _update_metadata(session_id, profile_id, memory_status=status)
+
+
+def session_review_path(session_id, profile_id=None):
+    """Path to a session's memory_review.json (validates the session)."""
+    d, _ = _session_dir(session_id, profile_id)
+    return d / "memory_review.json"

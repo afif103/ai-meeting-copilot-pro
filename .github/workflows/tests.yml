@@ -1,0 +1,22 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Single source of truth for test deps; intentionally lightweight.
+      # The profile/window isolation LOGIC runs headlessly via
+      # test_window_registry.py (no Tkinter); only the local Tk widget
+      # smoke test (test_review_windows.py) skips when headless.
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run session-archive / memory-review tests
+        run: python -m pytest tests/ -v
