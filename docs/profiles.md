@@ -81,3 +81,11 @@ tools, or employers that are not in the profile's memory files.
 
 Conversation/meeting auto-memory is a separate planned feature — modes do
 not save anything automatically yet.
+
+## Saving sessions
+
+You can explicitly save a transcript under your profile and generate a
+local structured summary — see [session-archive.md](session-archive.md).
+Saving is always a manual action, sessions are isolated per profile, and
+suggested memory updates are proposals only (nothing is written to
+permanent memory yet).

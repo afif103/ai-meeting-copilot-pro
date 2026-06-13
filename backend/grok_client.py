@@ -690,11 +690,13 @@ def _thinking_disabled_payload(model):
     return {}
 
 
-def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None, num_ctx=None):
+def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None, num_ctx=None,
+                 format_json=False):
     """
     Enhanced Ollama API call
 
     num_ctx: context window override; None keeps the model default
+    format_json: ask Ollama to constrain the output to valid JSON
     """
     if model is None:
         model = OLLAMA_MODEL_SUGGEST
@@ -713,6 +715,8 @@ def _call_ollama(prompt, max_tokens=100, temperature=0.5, model=None, num_ctx=No
     }
     if num_ctx:
         payload["options"]["num_ctx"] = num_ctx
+    if format_json:
+        payload["format"] = "json"
     payload.update(_thinking_disabled_payload(model))
 
     try:

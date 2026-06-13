@@ -21,7 +21,7 @@ from backend.grok_client import (
     refine_transcript,
 )
 from backend.memory_store import ensure_memory_files
-from backend import mode_store, profile_store
+from backend import mode_store, profile_store, session_store, session_summary
 
 # UI default for the Groq/Ollama toggle, driven by LLM_PROVIDER in .env
 DEFAULT_LLM_MODE = "groq" if LLM_PROVIDER == "groq" else "ollama"
@@ -65,6 +65,11 @@ class AICoplotPro:
         self.suggestion_queue = queue.Queue()
         self._streaming_start_pos = "1.0"  # For streaming UI
 
+        # Session-summary worker results land here; a main-thread poller
+        # drains the queue so worker threads never touch Tkinter.
+        self._summary_queue = queue.Queue()
+        self._summary_poller_on = False
+
         # Performance metrics
         self.metrics = {
             "session_start": time.time(),
@@ -94,6 +99,44 @@ class AICoplotPro:
         # CONTROL PANEL (spans both columns)
         ctrl = tk.Frame(self.root, bg="#2a2a3e", relief=tk.RAISED, bd=2)
         ctrl.grid(row=0, column=0, columnspan=2, sticky="ew", pady=2, padx=2)
+
+        # Second toolbar row: profile-scoped session archive (packed to the
+        # bottom FIRST so the main controls keep the top row)
+        archive_frm = tk.Frame(ctrl, bg="#23233a")
+        archive_frm.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.save_sum_btn = tk.Button(
+            archive_frm,
+            text="Save & Summarize",
+            command=self._save_and_summarize,
+            bg="#198754",
+            fg="white",
+            font=("Segoe UI", 8, "bold"),
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=8,
+            pady=2,
+        )
+        self.save_sum_btn.pack(side=tk.LEFT, padx=4, pady=2)
+
+        tk.Button(
+            archive_frm,
+            text="Session History",
+            command=self._open_session_history,
+            bg="#4a4a5e",
+            fg="white",
+            font=("Segoe UI", 8, "bold"),
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=8,
+            pady=2,
+        ).pack(side=tk.LEFT, padx=4, pady=2)
+
+        self.archive_status_lbl = tk.Label(
+            archive_frm, text="", bg="#23233a", fg="#9fd6ff",
+            font=("Segoe UI", 8),
+        )
+        self.archive_status_lbl.pack(side=tk.LEFT, padx=8)
 
         self.status_lbl = tk.Label(
             ctrl,
@@ -574,6 +617,7 @@ class AICoplotPro:
             messagebox.showerror("Error", f"Could not switch profile: {e}")
             self._refresh_profiles()
         self._refresh_modes()
+        self._refresh_history_window()
 
     def _refresh_modes(self):
         """Reload the mode dropdown to the active profile's saved mode"""
@@ -655,6 +699,379 @@ class AICoplotPro:
             messagebox.showerror("Cannot Create Profile", str(e))
         except Exception as e:
             messagebox.showerror("Error", f"Could not create profile: {e}")
+
+    # ---------- Profile-scoped session archive (explicit save only) ----------
+
+    _PRIVACY_TEXT = (
+        "This saves the visible transcript locally under the selected "
+        "profile. Make sure you have permission to store this discussion "
+        "and avoid confidential customer or company data unless allowed."
+    )
+
+    def _set_archive_status(self, text):
+        self.archive_status_lbl.config(text=text)
+
+    def _save_and_summarize(self):
+        """Explicitly save the visible transcript, then summarize locally"""
+        transcript = self.live_merge_str.strip()
+        if not transcript:
+            messagebox.showinfo("Nothing to Save",
+                                "There is no transcript text to save yet.")
+            return
+        try:
+            profile_id = profile_store.get_active_profile_id()
+            mode_id = profile_store.get_profile_mode(profile_id)
+        except ValueError as e:
+            messagebox.showerror("Select a Profile", str(e))
+            return
+        if not messagebox.askokcancel("Save Session Locally",
+                                      self._PRIVACY_TEXT):
+            return
+
+        self._set_archive_status("Saving transcript...")
+        try:
+            meta = session_store.create_session(
+                transcript, profile_id=profile_id, mode_id=mode_id
+            )
+        except Exception as e:
+            self._set_archive_status("")
+            messagebox.showerror("Error", f"Could not save session: {e}")
+            return
+
+        self._set_archive_status("Generating local summary...")
+        self.save_sum_btn.config(state=tk.DISABLED)
+        self._ensure_summary_poller()
+        threading.Thread(
+            target=self._summarize_worker,
+            args=(meta["session_id"], profile_id, transcript, mode_id),
+            daemon=True,
+        ).start()
+
+    def _summarize_worker(self, session_id, profile_id, transcript, mode_id):
+        """Background thread. Touches NO Tkinter - results go on a queue
+        that the main-thread poller (_poll_summary_queue) drains."""
+        try:
+            summary = session_summary.generate_session_summary(
+                transcript, mode_id
+            )
+            session_store.save_summary(session_id, summary,
+                                       profile_id=profile_id)
+            self._summary_queue.put(("done", session_id, profile_id, None))
+        except Exception as e:
+            message = str(e)
+            try:
+                session_store.mark_summary_failed(session_id, message,
+                                                  profile_id=profile_id)
+            except Exception:
+                pass
+            self._summary_queue.put(("failed", session_id, profile_id, message))
+
+    def _ensure_summary_poller(self):
+        """Start the main-thread queue poller once."""
+        if not self._summary_poller_on:
+            self._summary_poller_on = True
+            self._poll_summary_queue()
+
+    def _poll_summary_queue(self):
+        """Main thread: deliver finished summary results to the UI."""
+        try:
+            while True:
+                kind, sid, pid, msg = self._summary_queue.get_nowait()
+                if kind == "done":
+                    self._on_summary_done(sid, pid)
+                else:
+                    self._on_summary_failed(sid, pid, msg)
+        except queue.Empty:
+            pass
+        self.root.after(150, self._poll_summary_queue)
+
+    def _is_active_profile(self, profile_id):
+        """True only if profile_id is the currently selected profile."""
+        try:
+            return profile_store.get_active_profile_id() == profile_id
+        except ValueError:
+            return False  # no active profile selected
+
+    def _mode_label(self, mode_id):
+        """Display name for a (possibly old/removed) stored mode id."""
+        m = mode_store.get_mode(mode_id)
+        if m["id"] != mode_id:
+            return f"Unknown mode ({mode_id})"
+        return m["name"]
+
+    def _on_summary_done(self, session_id, profile_id):
+        # The worker already saved the summary locally. Only DISPLAY it if
+        # its owning profile is still active - never surface one profile's
+        # session while another profile is selected.
+        self.save_sum_btn.config(state=tk.NORMAL)
+        if not self._is_active_profile(profile_id):
+            self._set_archive_status("A saved session finished in another profile.")
+            return
+        self._set_archive_status("Summary ready")
+        self._refresh_history_window()
+        self._open_session_review(session_id, profile_id)
+
+    def _on_summary_failed(self, session_id, profile_id, message):
+        # Same isolation rule for failures - do not reveal another
+        # profile's title, transcript, or error details.
+        self.save_sum_btn.config(state=tk.NORMAL)
+        if not self._is_active_profile(profile_id):
+            self._set_archive_status("A saved session finished in another profile.")
+            return
+        self._set_archive_status("Summary failed - transcript saved")
+        self._refresh_history_window()
+        messagebox.showinfo(
+            "Transcript Saved - Summary Failed",
+            "The transcript was saved safely. The summary could not be "
+            f"generated:\n\n{message}\n\nYou can retry from Session "
+            "History (the Retry Summary button).",
+        )
+
+    def _format_summary_text(self, meta, summary):
+        """Readable plain-text rendering (also used by Copy Summary).
+
+        Tolerant of old/removed mode ids - rendering never changes the
+        active profile's current mode."""
+        mode_label = self._mode_label(meta.get("mode_id", ""))
+        prof = profile_store.get_profile(meta.get("profile_id", "")) or {}
+        lines = [
+            summary.get("title") or meta.get("title", "Session"),
+            f"Saved: {meta.get('created_at_utc', '')}  |  "
+            f"Profile: {prof.get('display_name', meta.get('profile_id'))}  |  "
+            f"Mode: {mode_label}",
+            "",
+            "OVERVIEW",
+            summary.get("overview", "") or "(none)",
+            "",
+            "KEY POINTS",
+        ]
+        lines += [f"- {p}" for p in summary.get("key_points", [])] or ["(none)"]
+        lines += ["", "DECISIONS"]
+        decisions = summary.get("decisions", [])
+        lines += [f"- [{d['status']}] {d['decision']}" for d in decisions] or ["(none)"]
+        lines += ["", "ACTION ITEMS"]
+        items = summary.get("action_items", [])
+        lines += [
+            f"- {a['task']}  (owner: {a['owner']}, due: {a['due_date']})"
+            for a in items
+        ] or ["(none)"]
+        lines += ["", "OPEN QUESTIONS"]
+        lines += [f"- {q}" for q in summary.get("open_questions", [])] or ["(none)"]
+        lines += [
+            "",
+            "SUGGESTED MEMORY UPDATES",
+            "Suggestions only - nothing has been added to permanent memory.",
+        ]
+        lines += [
+            f"- ({s['category']}, {s['confidence']}) {s['text']}"
+            for s in summary.get("suggested_memory_updates", [])
+        ] or ["(none)"]
+        return "\n".join(lines)
+
+    def _open_session_review(self, session_id, profile_id):
+        """Review window for one saved session"""
+        try:
+            data = session_store.get_session(session_id, profile_id)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open session: {e}")
+            return
+        meta, summary = data["metadata"], data["summary"]
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Session Review - {meta.get('title', session_id)}")
+        win.geometry("760x560")
+        win.configure(bg="#1e1e2e")
+
+        text = scrolledtext.ScrolledText(
+            win, wrap=tk.WORD, font=("Segoe UI", 10),
+            bg="#2b2b3e", fg="#e0e0e0", padx=12, pady=12,
+        )
+        text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        status = meta.get("summary_status", "pending")
+        if status == "complete" and summary:
+            body = self._format_summary_text(meta, summary)
+        elif status == "failed":
+            body = (
+                "Summary generation FAILED - the transcript is saved.\n\n"
+                f"Error: {meta.get('summary_error', 'unknown')}\n\n"
+                "Use Retry Summary below."
+            )
+        else:  # pending (including interrupted/never-finished generation)
+            body = (
+                "The transcript is saved, but no completed summary is "
+                "available. You can retry local summarization."
+            )
+        text.insert(tk.END, body)
+        text.config(state=tk.DISABLED)
+
+        btns = tk.Frame(win, bg="#1e1e2e")
+        btns.pack(pady=6)
+
+        def copy_summary():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(body)
+            messagebox.showinfo("Copied", "Summary copied to clipboard.",
+                                parent=win)
+
+        def open_transcript():
+            try:
+                t = session_store.get_transcript(session_id, profile_id)
+            except Exception as e:
+                messagebox.showerror("Error", str(e), parent=win)
+                return
+            tw = tk.Toplevel(win)
+            tw.title(f"Transcript - {meta.get('title', session_id)}")
+            tw.geometry("700x500")
+            box = scrolledtext.ScrolledText(tw, wrap=tk.WORD,
+                                            font=("Consolas", 10))
+            box.pack(fill=tk.BOTH, expand=True)
+            box.insert(tk.END, t)
+            box.config(state=tk.DISABLED)
+
+        retry_guard = {"running": False}
+
+        def retry_summary():
+            # One retry per window
+            if retry_guard["running"]:
+                return
+            # Load the transcript BEFORE destroying the window or touching
+            # controls, so any failure leaves the UI exactly as it was.
+            try:
+                transcript = session_store.get_transcript(session_id,
+                                                          profile_id)
+            except Exception as e:
+                self.save_sum_btn.config(state=tk.NORMAL)
+                messagebox.showerror(
+                    "Error", f"Could not read transcript: {e}", parent=win)
+                return
+            # Mark pending + clear the old error before launching.
+            try:
+                session_store.mark_summary_pending(session_id, profile_id)
+            except Exception as e:
+                self.save_sum_btn.config(state=tk.NORMAL)
+                messagebox.showerror(
+                    "Error", f"Could not start retry: {e}", parent=win)
+                return
+            # Retry init succeeded - now it is safe to commit the UI change.
+            retry_guard["running"] = True
+            win.destroy()
+            self._set_archive_status("Generating local summary...")
+            self.save_sum_btn.config(state=tk.DISABLED)
+            self._ensure_summary_poller()
+            threading.Thread(
+                target=self._summarize_worker,
+                args=(session_id, profile_id, transcript,
+                      meta.get("mode_id", "")),
+                daemon=True,
+            ).start()
+
+        win._retry_summary = retry_summary  # exposed for tests
+
+        btn_style = {"font": ("Segoe UI", 9), "relief": tk.FLAT,
+                     "cursor": "hand2", "padx": 10, "pady": 3}
+        tk.Button(btns, text="Copy Summary", command=copy_summary,
+                  bg="#0d6efd", fg="white", **btn_style).pack(
+            side=tk.LEFT, padx=4)
+        tk.Button(btns, text="Open Transcript", command=open_transcript,
+                  bg="#4a4a5e", fg="white", **btn_style).pack(
+            side=tk.LEFT, padx=4)
+        # Retry is available whenever there is no completed summary.
+        if status in ("failed", "pending"):
+            tk.Button(btns, text="Retry Summary", command=retry_summary,
+                      bg="#fd7e14", fg="white", **btn_style).pack(
+                side=tk.LEFT, padx=4)
+        tk.Button(btns, text="Close", command=win.destroy,
+                  bg="#6c757d", fg="white", **btn_style).pack(
+            side=tk.LEFT, padx=4)
+        return win
+
+    def _open_session_history(self):
+        """List the ACTIVE profile's saved sessions, newest first"""
+        try:
+            profile_id = profile_store.get_active_profile_id()
+        except ValueError as e:
+            messagebox.showerror("Select a Profile", str(e))
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Session History")
+        win.geometry("680x420")
+        win.configure(bg="#1e1e2e")
+        self._history_win = win
+
+        prof = profile_store.get_profile(profile_id) or {}
+        header = tk.Label(
+            win, text="", bg="#1e1e2e", fg="#00d4ff",
+            font=("Segoe UI", 10, "bold"),
+        )
+        header.pack(pady=(8, 2))
+
+        listbox = tk.Listbox(win, font=("Consolas", 9), bg="#2b2b3e",
+                             fg="#e0e0e0", selectbackground="#0d6efd")
+        listbox.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        rows = []
+
+        def refresh():
+            nonlocal rows
+            try:
+                pid = profile_store.get_active_profile_id()
+            except ValueError:
+                win.destroy()
+                return
+            p = profile_store.get_profile(pid) or {}
+            header.config(
+                text=f"Sessions for profile: {p.get('display_name', pid)}")
+            rows = session_store.list_sessions(pid)
+            listbox.delete(0, tk.END)
+            for m in rows:
+                mode = self._mode_label(m.get("mode_id", ""))
+                listbox.insert(
+                    tk.END,
+                    f"{m.get('created_at_utc', '')[:16]:16}  "
+                    f"{m.get('title', '')[:34]:34}  {mode[:24]:24}  "
+                    f"[{m.get('summary_status', '?')}]",
+                )
+            if not rows:
+                listbox.insert(tk.END, "(no saved sessions yet)")
+
+        win._refresh = refresh
+        refresh()
+
+        def open_selected():
+            sel = listbox.curselection()
+            if not sel or not rows:
+                return
+            idx = sel[0]
+            if idx >= len(rows):
+                return
+            try:
+                pid = profile_store.get_active_profile_id()
+            except ValueError:
+                return
+            self._open_session_review(rows[idx]["session_id"], pid)
+
+        btns = tk.Frame(win, bg="#1e1e2e")
+        btns.pack(pady=6)
+        tk.Button(btns, text="Open", command=open_selected, bg="#0d6efd",
+                  fg="white", font=("Segoe UI", 9), relief=tk.FLAT,
+                  cursor="hand2", padx=12, pady=3).pack(side=tk.LEFT, padx=4)
+        tk.Button(btns, text="Refresh", command=refresh, bg="#4a4a5e",
+                  fg="white", font=("Segoe UI", 9), relief=tk.FLAT,
+                  cursor="hand2", padx=12, pady=3).pack(side=tk.LEFT, padx=4)
+        tk.Button(btns, text="Close", command=win.destroy, bg="#6c757d",
+                  fg="white", font=("Segoe UI", 9), relief=tk.FLAT,
+                  cursor="hand2", padx=12, pady=3).pack(side=tk.LEFT, padx=4)
+
+    def _refresh_history_window(self):
+        """Refresh the history window if it is open (e.g. profile switch)"""
+        win = getattr(self, "_history_win", None)
+        if win is not None:
+            try:
+                if win.winfo_exists():
+                    win._refresh()
+            except Exception:
+                pass
 
     def _open_custom_prompt_editor(self):
         """Open popup window to edit custom prompt"""
