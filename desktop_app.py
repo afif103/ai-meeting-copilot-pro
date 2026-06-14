@@ -28,6 +28,7 @@ from backend import (
     profile_store,
     session_store,
     session_summary,
+    trainer_questions,
     window_registry,
 )
 
@@ -148,6 +149,19 @@ class AICoplotPro:
             archive_frm,
             text="Approved Memory",
             command=self._open_approved_memory,
+            bg="#4a4a5e",
+            fg="white",
+            font=("Segoe UI", 8, "bold"),
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=8,
+            pady=2,
+        ).pack(side=tk.LEFT, padx=4, pady=2)
+
+        tk.Button(
+            archive_frm,
+            text="Trainer",
+            command=self._open_trainer,
             bg="#4a4a5e",
             fg="white",
             font=("Segoe UI", 8, "bold"),
@@ -1340,6 +1354,190 @@ class AICoplotPro:
                 pass
             messagebox.showerror("Error",
                                  f"Could not open Approved Memory: {e}")
+            return None
+        return win
+
+    def _open_trainer(self):
+        """Profile-bound Interview Trainer window (Packet 8A).
+
+        A static, local question flow: pick a track (Call Center / Virtual
+        Assistant), a difficulty, and Simple English, then page through
+        four questions. All state is window-local and temporary - it never
+        touches the profile's stored mode, never writes files, and makes NO
+        audio/LLM/cloud calls. Closes on a profile switch via the shared
+        window registry (fails closed when no profile is active)."""
+        try:
+            profile_id = profile_store.get_active_profile_id()
+        except ValueError as e:
+            messagebox.showerror("Select a Profile", str(e))
+            return None
+
+        win = tk.Toplevel(self.root)
+        self._register_archive_window(win, profile_id)  # close on switch
+        try:
+            win.title("Interview Trainer")
+            win.geometry("680x560")
+            win.configure(bg="#1e1e2e")
+            prof = profile_store.get_profile(profile_id) or {}
+            prof_name = prof.get("display_name", profile_id)
+
+            tracks = trainer_questions.get_tracks()
+            diffs = trainer_questions.get_difficulties()
+            track_ids = [t.id for t in tracks]
+            diff_ids = [d.id for d in diffs]
+
+            tk.Label(win, text="Interview Trainer", bg="#1e1e2e",
+                     fg="#00d4ff", font=("Segoe UI", 12, "bold")).pack(
+                         pady=(8, 0))
+            tk.Label(win, text=f"Profile: {prof_name}", bg="#1e1e2e",
+                     fg="#9fd6ff", font=("Segoe UI", 9)).pack()
+
+            ctrl = tk.Frame(win, bg="#1e1e2e")
+            ctrl.pack(pady=6)
+            tk.Label(ctrl, text="Track:", bg="#1e1e2e", fg="#e0e0e0",
+                     font=("Segoe UI", 9)).grid(row=0, column=0, padx=(0, 2))
+            track_combo = ttk.Combobox(ctrl, values=[t.name for t in tracks],
+                                       state="readonly", width=18)
+            track_combo.current(0)  # Call Center
+            track_combo.grid(row=0, column=1, padx=(0, 10))
+            tk.Label(ctrl, text="Difficulty:", bg="#1e1e2e", fg="#e0e0e0",
+                     font=("Segoe UI", 9)).grid(row=0, column=2, padx=(0, 2))
+            diff_combo = ttk.Combobox(ctrl, values=[d.name for d in diffs],
+                                      state="readonly", width=10)
+            diff_combo.current(0)  # Easy
+            diff_combo.grid(row=0, column=3, padx=(0, 10))
+            simple_var = tk.BooleanVar(value=True)  # Simple English on
+            simple_chk = tk.Checkbutton(
+                ctrl, text="Simple English", variable=simple_var,
+                bg="#1e1e2e", fg="#e0e0e0", selectcolor="#2b2b3e",
+                activebackground="#1e1e2e", activeforeground="#e0e0e0",
+                font=("Segoe UI", 9))
+            simple_chk.grid(row=0, column=4)
+
+            q_text = scrolledtext.ScrolledText(
+                win, wrap=tk.WORD, font=("Segoe UI", 13), bg="#2b2b3e",
+                fg="#e0e0e0", height=8, padx=14, pady=14)
+            q_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
+
+            pos_lbl = tk.Label(win, text="", bg="#1e1e2e", fg="#9fd6ff",
+                               font=("Segoe UI", 9, "bold"))
+            pos_lbl.pack()
+
+            nav = tk.Frame(win, bg="#1e1e2e")
+            nav.pack(pady=6)
+            prev_btn = tk.Button(nav, text="Previous Question", bg="#4a4a5e",
+                                 fg="white", font=("Segoe UI", 9),
+                                 relief=tk.FLAT, cursor="hand2", padx=10,
+                                 pady=3)
+            next_btn = tk.Button(nav, text="Next Question", bg="#0d6efd",
+                                 fg="white", font=("Segoe UI", 9),
+                                 relief=tk.FLAT, cursor="hand2", padx=10,
+                                 pady=3)
+            close_btn = tk.Button(nav, text="Close", command=win.destroy,
+                                  bg="#6c757d", fg="white",
+                                  font=("Segoe UI", 9), relief=tk.FLAT,
+                                  cursor="hand2", padx=10, pady=3)
+            prev_btn.pack(side=tk.LEFT, padx=4)
+            next_btn.pack(side=tk.LEFT, padx=4)
+            close_btn.pack(side=tk.LEFT, padx=4)
+
+            tk.Label(win, text="Voice answers and AI feedback will be added "
+                     "in later trainer updates.", bg="#1e1e2e", fg="#9aa",
+                     font=("Segoe UI", 8), wraplength=640).pack(pady=(0, 8))
+
+            # ---- window-local state (never the profile's stored mode) ----
+            state = {"index": 0}
+
+            def current_ids():
+                return track_ids[track_combo.current()], \
+                    diff_ids[diff_combo.current()]
+
+            def render():
+                t_id, d_id = current_ids()
+                questions = trainer_questions.get_questions(t_id, d_id)
+                total = len(questions)
+                state["index"] = max(0, min(state["index"], total - 1))
+                q = questions[state["index"]]
+                q_text.config(state=tk.NORMAL)
+                q_text.delete("1.0", tk.END)
+                q_text.insert(
+                    tk.END,
+                    trainer_questions.get_question_text(q, simple_var.get()))
+                q_text.config(state=tk.DISABLED)
+                pos_lbl.config(
+                    text=f"Question {state['index'] + 1} of {total}")
+                prev_btn.config(
+                    state=tk.NORMAL if state["index"] > 0 else tk.DISABLED)
+                next_btn.config(
+                    state=tk.NORMAL if state["index"] < total - 1
+                    else tk.DISABLED)
+
+            def on_track(event=None):
+                state["index"] = 0  # changing track resets to question 1
+                render()
+
+            def on_difficulty(event=None):
+                state["index"] = 0  # changing difficulty resets to question 1
+                render()
+
+            def on_simple():
+                render()  # wording only; keep the same question index
+
+            def on_prev():
+                if state["index"] > 0:
+                    state["index"] -= 1
+                    render()
+
+            def on_next():
+                t_id, d_id = current_ids()
+                total = len(trainer_questions.get_questions(t_id, d_id))
+                if state["index"] < total - 1:
+                    state["index"] += 1
+                    render()
+
+            track_combo.bind("<<ComboboxSelected>>", on_track)
+            diff_combo.bind("<<ComboboxSelected>>", on_difficulty)
+            simple_chk.config(command=on_simple)
+            prev_btn.config(command=on_prev)
+            next_btn.config(command=on_next)
+            render()
+
+            # ---- test hooks (drive/inspect without changing behavior) ----
+            def _select_track(track_id):
+                track_combo.current(track_ids.index(track_id))
+                on_track()
+
+            def _select_difficulty(diff_id):
+                diff_combo.current(diff_ids.index(diff_id))
+                on_difficulty()
+
+            def _set_simple(value):
+                simple_var.set(bool(value))
+                on_simple()
+
+            win._render = render
+            win._trainer = {
+                "state": state,
+                "ids": current_ids,
+                "question_text": lambda: q_text.get("1.0", tk.END).strip(),
+                "position_text": lambda: pos_lbl.cget("text"),
+                "simple_enabled": lambda: bool(simple_var.get()),
+                "prev_enabled":
+                    lambda: str(prev_btn["state"]) == tk.NORMAL,
+                "next_enabled":
+                    lambda: str(next_btn["state"]) == tk.NORMAL,
+                "next": on_next,
+                "prev": on_prev,
+                "select_track": _select_track,
+                "select_difficulty": _select_difficulty,
+                "set_simple": _set_simple,
+            }
+        except Exception as e:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            messagebox.showerror("Error", f"Could not open Trainer: {e}")
             return None
         return win
 
