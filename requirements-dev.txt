@@ -5,6 +5,12 @@
 # tests under tests/ are pure-stdlib backend tests plus optional Tkinter UI
 # tests (auto-skipped headless). They do NOT need the heavy desktop/ML
 # stack (faster-whisper, chromadb, torch, sounddevice, ...).
+#
+# numpy is the one numeric dependency the tests exercise directly: the
+# Trainer's local-transcription adapter
+# (backend/trainer_voice.make_transcribe_fn) converts WAV bytes to a numpy
+# array, and tests/test_trainer_voice.py runs that adapter with fakes.
 pytest>=7
 requests
 python-dotenv
+numpy

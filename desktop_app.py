@@ -29,6 +29,7 @@ from backend import (
     session_store,
     session_summary,
     trainer_questions,
+    trainer_voice,
     window_registry,
 )
 
@@ -1357,15 +1358,21 @@ class AICoplotPro:
             return None
         return win
 
-    def _open_trainer(self):
-        """Profile-bound Interview Trainer window (Packet 8A).
+    def _open_trainer(self, *, _recorder_factory=None, _transcribe_fn=None,
+                      _mic_available=None, _schedule=None, _spawn=None):
+        """Profile-bound Interview Trainer window (Packets 8A + 8B).
 
-        A static, local question flow: pick a track (Call Center / Virtual
-        Assistant), a difficulty, and Simple English, then page through
-        four questions. All state is window-local and temporary - it never
-        touches the profile's stored mode, never writes files, and makes NO
-        audio/LLM/cloud calls. Closes on a profile switch via the shared
-        window registry (fails closed when no profile is active)."""
+        A static, local question flow (pick a track / difficulty / Simple
+        English and page through four questions) PLUS microphone-only spoken
+        answer recording with LOCAL Faster-Whisper transcription. It never
+        touches the profile's stored mode, never writes profile/session/
+        memory files, and makes NO LLM/Groq/cloud calls. Recording uses a
+        temporary WAV that is always deleted. Closes on a profile switch via
+        the shared window registry (fails closed when no profile is active).
+
+        The leading-underscore keyword args are TEST hooks (inject fakes for
+        the recorder/transcriber/scheduler so tests use no real mic, Whisper
+        model, or threads). Production calls take no arguments."""
         try:
             profile_id = profile_store.get_active_profile_id()
         except ValueError as e:
@@ -1376,7 +1383,7 @@ class AICoplotPro:
         self._register_archive_window(win, profile_id)  # close on switch
         try:
             win.title("Interview Trainer")
-            win.geometry("680x560")
+            win.geometry("700x720")
             win.configure(bg="#1e1e2e")
             prof = profile_store.get_profile(profile_id) or {}
             prof_name = prof.get("display_name", profile_id)
@@ -1441,9 +1448,42 @@ class AICoplotPro:
             next_btn.pack(side=tk.LEFT, padx=4)
             close_btn.pack(side=tk.LEFT, padx=4)
 
-            tk.Label(win, text="Voice answers and AI feedback will be added "
-                     "in later trainer updates.", bg="#1e1e2e", fg="#9aa",
-                     font=("Segoe UI", 8), wraplength=640).pack(pady=(0, 8))
+            # ---- Answer section (Packet 8B: mic record + local Whisper) ----
+            ans = tk.LabelFrame(win, text="Your spoken answer", bg="#1e1e2e",
+                                fg="#9fd6ff", font=("Segoe UI", 9, "bold"))
+            ans.pack(fill=tk.BOTH, expand=True, padx=10, pady=(2, 4))
+            mic_lbl = tk.Label(ans, text="Microphone:", bg="#1e1e2e",
+                               fg="#e0e0e0", font=("Segoe UI", 8))
+            mic_lbl.pack(anchor="w", padx=8, pady=(4, 0))
+            abtns = tk.Frame(ans, bg="#1e1e2e")
+            abtns.pack(anchor="w", padx=8, pady=2)
+            start_btn = tk.Button(abtns, text="Start Answer", bg="#198754",
+                                  fg="white", font=("Segoe UI", 9),
+                                  relief=tk.FLAT, cursor="hand2", padx=10,
+                                  pady=3)
+            stop_btn = tk.Button(abtns, text="Stop Answer", bg="#dc3545",
+                                 fg="white", font=("Segoe UI", 9),
+                                 relief=tk.FLAT, cursor="hand2", padx=10,
+                                 pady=3)
+            clear_btn = tk.Button(abtns, text="Clear Answer", bg="#6c757d",
+                                  fg="white", font=("Segoe UI", 9),
+                                  relief=tk.FLAT, cursor="hand2", padx=10,
+                                  pady=3)
+            start_btn.pack(side=tk.LEFT, padx=2)
+            stop_btn.pack(side=tk.LEFT, padx=2)
+            clear_btn.pack(side=tk.LEFT, padx=2)
+            status_lbl = tk.Label(ans, text="Status: Ready", bg="#1e1e2e",
+                                  fg="#9fd6ff", font=("Segoe UI", 9))
+            status_lbl.pack(anchor="w", padx=8, pady=(2, 0))
+            transcript_txt = scrolledtext.ScrolledText(
+                ans, wrap=tk.WORD, font=("Segoe UI", 11), bg="#2b2b3e",
+                fg="#e0e0e0", height=6, padx=10, pady=8)
+            transcript_txt.pack(fill=tk.BOTH, expand=True, padx=8, pady=(2, 8))
+            transcript_txt.config(state=tk.DISABLED)
+
+            tk.Label(win, text="AI feedback and scoring will be added in a "
+                     "later trainer update.", bg="#1e1e2e", fg="#9aa",
+                     font=("Segoe UI", 8), wraplength=660).pack(pady=(0, 8))
 
             # ---- window-local state (never the profile's stored mode) ----
             state = {"index": 0}
@@ -1472,28 +1512,185 @@ class AICoplotPro:
                     state=tk.NORMAL if state["index"] < total - 1
                     else tk.DISABLED)
 
+            # ---- voice answer wiring (Packet 8B) ----
+            def _current_qid():
+                t_id, d_id = current_ids()
+                return trainer_questions.get_questions(
+                    t_id, d_id)[state["index"]].id
+
+            def _set_transcript(text):
+                transcript_txt.config(state=tk.NORMAL)
+                transcript_txt.delete("1.0", tk.END)
+                if text:
+                    transcript_txt.insert(tk.END, text)
+                transcript_txt.config(state=tk.DISABLED)
+
+            def _set_controls(phase):
+                # phase: "ready" | "recording" | "transcribing"
+                recording = phase == "recording"
+                busy = phase in ("recording", "transcribing")
+                start_btn.config(
+                    state=tk.NORMAL if (mic_ok and not busy) else tk.DISABLED)
+                stop_btn.config(state=tk.NORMAL if recording else tk.DISABLED)
+                clear_btn.config(
+                    state=tk.NORMAL if (controller.transcript and not busy)
+                    else tk.DISABLED)
+                combo_state = "disabled" if busy else "readonly"
+                track_combo.config(state=combo_state)
+                diff_combo.config(state=combo_state)
+                simple_chk.config(state=tk.DISABLED if busy else tk.NORMAL)
+                if busy:                       # navigation off while busy
+                    prev_btn.config(state=tk.DISABLED)
+                    next_btn.config(state=tk.DISABLED)
+                else:
+                    render()                   # restores Prev/Next per bounds
+
+            def on_voice_state(vstate, info):
+                # always invoked on the UI thread; ignore late callbacks
+                if not win.winfo_exists():
+                    return
+                status = info.get("status")
+                if vstate == trainer_voice.RECORDING:
+                    # Correction 4: a new recording immediately clears any old
+                    # visible transcript; it stays empty until the new result.
+                    _set_transcript("")
+                    name = str(info.get("device_name", "microphone"))[:40]
+                    mic_lbl.config(text=f"Microphone: {name}")
+                    status_lbl.config(text="Status: Recording…")
+                    _set_controls("recording")
+                elif vstate == trainer_voice.TRANSCRIBING:
+                    extra = (" (limit reached)" if info.get("limit_reached")
+                             else "")
+                    status_lbl.config(
+                        text=f"Status: Transcribing locally…{extra}")
+                    _set_controls("transcribing")
+                else:  # READY
+                    if status == "ok":
+                        _set_transcript(info.get("transcript", ""))
+                        extra = (" (recording limit reached)"
+                                 if info.get("limit_reached") else "")
+                        status_lbl.config(
+                            text=f"Status: Transcript ready{extra}")
+                    elif status == "empty":
+                        _set_transcript("")
+                        extra = (" (recording limit reached)"
+                                 if info.get("limit_reached") else "")
+                        status_lbl.config(
+                            text=f"Status: No speech detected{extra}")
+                    elif status == "error":
+                        _set_transcript("")
+                        status_lbl.config(
+                            text="Status: Could not transcribe. Try again.")
+                    elif status == "mic_unavailable":
+                        status_lbl.config(
+                            text="Status: No microphone available.")
+                    elif status == "cleared":
+                        _set_transcript("")
+                        status_lbl.config(text="Status: Ready")
+                    _set_controls("ready")
+
+            recorder_factory = _recorder_factory or trainer_voice.MicRecorder
+            transcribe_fn = _transcribe_fn or trainer_voice.make_transcribe_fn(
+                lambda: self.transcriber)
+
+            # Tk-safety: worker/timer threads must NEVER touch Tkinter. The
+            # controller's `schedule(fn)` only puts a callback on this
+            # thread-safe queue; a MAIN-THREAD poller (win.after) drains and
+            # runs them. Late callbacks after the window is gone are dropped.
+            _cbq = queue.Queue()
+            _poller = {"alive": True, "after_id": None}
+
+            def _queue_schedule(fn):       # called from worker/timer threads
+                _cbq.put(fn)
+
+            def _drain_callbacks():        # MAIN THREAD only
+                while True:
+                    try:
+                        cb = _cbq.get_nowait()
+                    except queue.Empty:
+                        break
+                    try:
+                        cb()
+                    except Exception:
+                        pass
+
+            def _poll_callbacks():
+                if not _poller["alive"] or not win.winfo_exists():
+                    _poller["alive"] = False
+                    return
+                _drain_callbacks()
+                if _poller["alive"] and win.winfo_exists():
+                    _poller["after_id"] = win.after(40, _poll_callbacks)
+
+            controller = trainer_voice.TrainerVoiceController(
+                recorder_factory, transcribe_fn,
+                (_schedule or _queue_schedule), on_voice_state, spawn=_spawn)
+            _poller["after_id"] = win.after(40, _poll_callbacks)  # main thread
+            try:
+                mic_ok = bool(_mic_available() if _mic_available is not None
+                              else trainer_voice.mic_available())
+            except Exception:
+                mic_ok = False
+            mic_lbl.config(text="Microphone: ready" if mic_ok
+                           else "Microphone: not detected")
+
+            def on_start():
+                if controller.is_busy:
+                    return
+                controller.start(_current_qid())
+
+            def on_stop():
+                controller.stop()
+
+            def on_clear():
+                controller.clear()
+
+            start_btn.config(command=on_start)
+            stop_btn.config(command=on_stop)
+            clear_btn.config(command=on_clear)
+
+            def _answer_clear_on_question_change():
+                # An answer belongs to the recorded question id. Moving to a
+                # different question drops it - even after a no-speech or
+                # error result (transcript already empty but ownership held).
+                # clear() resets the transcript, status (-> Ready) and Clear
+                # button. Simple English keeps the SAME id, so it is untouched.
+                if controller.question_id is not None:
+                    controller.clear()
+
             def on_track(event=None):
+                if controller.is_busy:
+                    return
                 state["index"] = 0  # changing track resets to question 1
                 render()
+                _answer_clear_on_question_change()
 
             def on_difficulty(event=None):
+                if controller.is_busy:
+                    return
                 state["index"] = 0  # changing difficulty resets to question 1
                 render()
+                _answer_clear_on_question_change()
 
             def on_simple():
-                render()  # wording only; keep the same question index
+                render()  # wording only; same question id -> keep transcript
 
             def on_prev():
-                if state["index"] > 0:
-                    state["index"] -= 1
-                    render()
+                if controller.is_busy or state["index"] <= 0:
+                    return
+                state["index"] -= 1
+                render()
+                _answer_clear_on_question_change()
 
             def on_next():
+                if controller.is_busy:
+                    return
                 t_id, d_id = current_ids()
                 total = len(trainer_questions.get_questions(t_id, d_id))
                 if state["index"] < total - 1:
                     state["index"] += 1
                     render()
+                    _answer_clear_on_question_change()
 
             track_combo.bind("<<ComboboxSelected>>", on_track)
             diff_combo.bind("<<ComboboxSelected>>", on_difficulty)
@@ -1501,6 +1698,16 @@ class AICoplotPro:
             prev_btn.config(command=on_prev)
             next_btn.config(command=on_next)
             render()
+            _set_controls("ready")
+
+            def _on_destroy(event):
+                # window closed (Close button OR profile-switch registry):
+                # stop the poller, stop capture, cancel transcription, and
+                # drop any pending callbacks (never touch destroyed widgets).
+                if event.widget is win:
+                    _poller["alive"] = False
+                    controller.close()
+            win.bind("<Destroy>", _on_destroy)
 
             # ---- test hooks (drive/inspect without changing behavior) ----
             def _select_track(track_id):
@@ -1531,6 +1738,23 @@ class AICoplotPro:
                 "select_track": _select_track,
                 "select_difficulty": _select_difficulty,
                 "set_simple": _set_simple,
+                # ---- Packet 8B voice hooks ----
+                "controller": controller,
+                "current_qid": _current_qid,
+                "start_answer": on_start,
+                "stop_answer": on_stop,
+                "clear_answer": on_clear,
+                "transcript_text":
+                    lambda: transcript_txt.get("1.0", tk.END).strip(),
+                "status_text": lambda: status_lbl.cget("text"),
+                "mic_label": lambda: mic_lbl.cget("text"),
+                "start_enabled":
+                    lambda: str(start_btn["state"]) == tk.NORMAL,
+                "stop_enabled": lambda: str(stop_btn["state"]) == tk.NORMAL,
+                "clear_enabled":
+                    lambda: str(clear_btn["state"]) == tk.NORMAL,
+                # drive the main-thread callback poller deterministically
+                "drain": _drain_callbacks,
             }
         except Exception as e:
             try:

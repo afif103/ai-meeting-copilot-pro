@@ -27,7 +27,7 @@ try:
     _probe.destroy()
     import desktop_app
     from backend import (memory_review, profile_store, session_store,
-                         trainer_questions)
+                         trainer_questions, trainer_voice)
     _HAVE_UI = True
     _SKIP = ""
 except Exception as e:  # pragma: no cover - environment dependent
@@ -58,6 +58,24 @@ def _find_button(widget, text, acc):
             acc.append(c)
         _find_button(c, text, acc)
     return acc
+
+
+class _CfgRecorder:
+    """Configurable fake mic recorder for the Tk smoke (no real device).
+    cfg["audio"] is what stop() returns (b"" simulates no captured speech)."""
+
+    def __init__(self, cfg):
+        self._cfg = cfg
+        self.device_name = "Fake Test Mic"
+        self.started = False
+        self.stopped = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+        return self._cfg["audio"]
 
 
 def test_review_window_smoke():
@@ -130,7 +148,24 @@ def test_review_window_smoke():
                  mock.patch.object(desktop_app, "refine_transcript",
                                    side_effect=_no_llm):
                 assert _find_button(app.root, "Trainer", [])  # toolbar wired
-                tr = app._open_trainer()
+                # Inject fakes: no real microphone, Whisper model, or LLM. The
+                # transcription worker is DEFERRED (a deterministic background
+                # job) and its result is delivered only via the Trainer's
+                # main-thread callback poller (drain).
+                deferred = []
+                voice_cfg = {"audio": b"\x00\x00" * 800,
+                             "text": "fake spoken answer", "fail": False}
+
+                def _voice_transcribe(wav_path):
+                    if voice_cfg["fail"]:
+                        raise RuntimeError("local transcription failed")
+                    return voice_cfg["text"]
+
+                tr = app._open_trainer(
+                    _recorder_factory=lambda: _CfgRecorder(voice_cfg),
+                    _transcribe_fn=_voice_transcribe,
+                    _mic_available=lambda: True,
+                    _spawn=deferred.append)   # defer; run explicitly in-test
                 app.root.update()
                 assert tr is not None and tr.winfo_exists()
                 assert a["id"] in app._review_windows.owners()  # bound to A
@@ -175,6 +210,94 @@ def test_review_window_smoke():
                 assert normal_text == trainer_questions.get_questions(
                     "virtual_assistant", "hard")[0].normal
 
+                # --- Packet 8B: voice capture + LOCAL transcription ---
+                # (still inside the LLM guard: recording/transcribing must
+                #  never call generate_suggestion / refine_transcript.)
+                def _run_worker():
+                    # background worker runs (temp WAV + transcribe + QUEUE
+                    # result), then the main-thread poller drains and applies.
+                    assert deferred, "no transcription worker was spawned"
+                    deferred.pop()()      # worker only queues the callback
+                    T["drain"]()          # main-thread poller runs it
+                    app.root.update()
+
+                assert _find_button(tr, "Start Answer", [])
+                assert _find_button(tr, "Stop Answer", [])
+                assert _find_button(tr, "Clear Answer", [])
+                assert T["status_text"]() == "Status: Ready"
+                assert T["start_enabled"]() is True   # mic available
+                assert T["stop_enabled"]() is False
+                assert T["clear_enabled"]() is False
+                assert T["transcript_text"]() == ""
+                # record -> controls lock; stop -> background transcribe.
+                T["start_answer"](); app.root.update()
+                assert T["controller"].state == trainer_voice.RECORDING
+                assert T["stop_enabled"]() is True
+                assert T["start_enabled"]() is False
+                assert T["next_enabled"]() is False   # nav locked while busy
+                T["stop_answer"]()
+                assert T["controller"].state == trainer_voice.TRANSCRIBING
+                assert T["transcript_text"]() == ""   # not delivered yet
+                _run_worker()                          # background -> poller
+                assert T["transcript_text"]() == "fake spoken answer"
+                assert "Transcript ready" in T["status_text"]()
+                assert T["clear_enabled"]() is True
+                assert T["next_enabled"]() is True    # nav restored
+                # Correction 4: a NEW recording immediately clears the old
+                # visible transcript and keeps it empty (Clear off) while busy.
+                T["start_answer"](); app.root.update()
+                assert T["transcript_text"]() == ""   # old transcript cleared
+                assert T["clear_enabled"]() is False
+                T["stop_answer"](); _run_worker()
+                assert T["transcript_text"]() == "fake spoken answer"  # replaced
+                # navigating to another question clears the transcript
+                T["next"](); app.root.update()
+                assert T["transcript_text"]() == ""
+                assert T["controller"].transcript == ""
+                # record again, then Clear Answer
+                T["start_answer"](); app.root.update()
+                T["stop_answer"](); _run_worker()
+                assert T["transcript_text"]() == "fake spoken answer"
+                T["clear_answer"](); app.root.update()
+                assert T["transcript_text"]() == ""
+                # Simple English toggle keeps the same question's transcript
+                T["start_answer"](); app.root.update()
+                T["stop_answer"](); _run_worker()
+                kept = T["transcript_text"]()
+                assert kept == "fake spoken answer"
+                T["set_simple"](False); app.root.update()
+                assert T["transcript_text"]() == kept  # toggle preserved it
+
+                # Correction 2: ownership-based clearing. An empty-audio or
+                # errored result still OWNS its question id; navigating clears
+                # that ownership and resets status to Ready even though the
+                # transcript was already empty.
+                T["select_track"]("call_center")
+                T["select_difficulty"]("easy"); app.root.update()  # known state
+                # (a) empty capture -> "No speech detected" -> navigate -> Ready
+                voice_cfg["audio"] = b""
+                T["start_answer"](); app.root.update()
+                T["stop_answer"](); _run_worker()
+                assert "No speech detected" in T["status_text"]()
+                assert T["transcript_text"]() == ""
+                assert T["controller"].question_id is not None  # owns question
+                assert T["clear_enabled"]() is False            # nothing to clear
+                T["next"](); app.root.update()
+                assert T["status_text"]() == "Status: Ready"
+                assert T["controller"].question_id is None       # ownership cleared
+                assert T["transcript_text"]() == ""
+                # (b) transcription error -> change difficulty -> Ready, cleared
+                voice_cfg["audio"] = b"\x00\x00" * 800
+                voice_cfg["fail"] = True
+                T["start_answer"](); app.root.update()
+                T["stop_answer"](); _run_worker()
+                assert "Could not transcribe" in T["status_text"]()
+                assert T["controller"].question_id is not None
+                T["select_difficulty"]("medium"); app.root.update()
+                assert T["status_text"]() == "Status: Ready"
+                assert T["controller"].question_id is None
+                voice_cfg["fail"] = False                        # restore
+
             # no profile-file write, no stored-mode change from the Trainer
             assert _profile_files() == files_before
             assert profile_store.get_profile_mode(a["id"]) == mode_before
@@ -195,13 +318,23 @@ def test_review_window_smoke():
             # session + memory + approved-memory + trainer + transcript
             assert len(_live_toplevels(app)) >= 5
 
+            # Packet 8B: a delivered-but-not-yet-run callback must be dropped
+            # when the Trainer closes on a profile switch (no late update to
+            # the destroyed window). Run the worker so it QUEUES _finish on
+            # the Tk-safe queue, but do NOT drain; then switch profiles.
+            T["start_answer"](); app.root.update()
+            T["stop_answer"]()
+            assert deferred
+            deferred.pop()()   # worker queues _finish (poller not drained yet)
+
             app._refresh_profiles()
             app.profile_combo.current(app._profile_ids.index(b["id"]))
             app._on_profile_selected()
-            app.root.update()
+            app.root.update()  # poller is dead -> the queued callback never runs
             assert _live_toplevels(app) == []  # all of A's windows closed
             assert not am.winfo_exists()  # Approved Memory closed on switch
             assert not tr.winfo_exists()  # Trainer closed on switch
+            assert T["controller"].state == trainer_voice.CLOSED  # work cancelled
 
             # --- rendering failure leaves no untracked window ---
             profile_store.set_active_profile_id(a["id"])

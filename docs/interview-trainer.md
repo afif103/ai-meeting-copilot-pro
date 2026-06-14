@@ -58,14 +58,57 @@ changes.
   window settings** — they are not saved, and they do **not** change the
   profile's selected copilot mode.
 
-## Current limitations (Packet 8A)
+## Recording and transcribing your answer
 
-This first version is intentionally small. It does **not** yet include:
+Below the question is an **Your spoken answer** section:
 
-- **No microphone recording** of your answers.
-- **No transcription** of spoken answers.
-- **No AI feedback, scoring, or improved sample answers.**
-- **No session saving** — questions and any practice are not stored.
+1. Click **Start Answer** to begin recording from your microphone. The status
+   changes to **Recording…** and the question controls lock while recording.
+2. Speak your answer, then click **Stop Answer**.
+3. The answer is transcribed **locally** (on this PC) with Faster-Whisper. The
+   status shows **Transcribing locally…**, then **Transcript ready** with your
+   text in the read-only box.
+4. Click **Clear Answer** to remove the transcript and try again.
+
+Notes:
+
+- **Microphone only.** Answer recording always uses a **physical microphone**.
+  Virtual / loopback inputs (for example **Voicemeeter**, VB-Cable, or
+  "Stereo Mix") are **never** used to record your answer, so your spoken
+  answer is never mixed with system or interviewer audio. If only a virtual
+  device is available, recording is unavailable and the status says so — this
+  does **not** change or interfere with the app's normal interview/system-audio
+  (Voicemeeter) capture, which is left exactly as it is.
+- **Manual only.** Recording never starts on its own — only when you press
+  **Start Answer**. There is a safety limit of about **120 seconds** per
+  recording; if reached, recording stops and transcription continues.
+- **Changing the question clears the answer.** Moving to another question, or
+  changing track or difficulty, clears the transcript (an answer belongs only
+  to the question it was recorded for). Toggling **Simple English** keeps the
+  transcript, because it is still the same question.
+- **Nothing is kept.** The recorded audio uses a temporary file that is
+  **deleted** after transcription (and on error, on clearing, on closing the
+  window, or on a profile switch). Neither the audio nor the transcript is
+  saved to your profile, sessions, or memory.
+- **Profile-bound and safe.** Closing the Trainer or switching profiles stops
+  any active recording and cancels the answer. If local transcription has not
+  started yet, it is skipped entirely. If a local transcription is already
+  running it cannot be force-stopped, but its result is **discarded** (never
+  shown) and its temporary audio is deleted — nothing is delivered to a closed
+  window.
+
+## Current limitations (Packet 8B)
+
+The Trainer can now show questions and record + transcribe a spoken answer. It
+does **not** yet include:
+
+- **No AI feedback** on your answer.
+- **No scoring.**
+- **No improved sample answer.**
+- **No session saving** — questions, answers, and transcripts are not stored.
+- **No memory updates** — nothing is written to profile memory.
+- **No system-audio capture** for the Trainer (answers are microphone-only).
+- **No cloud transcription** — transcription is always local.
 
 The questions are a fixed, built-in practice set (generic and synthetic).
-Voice answers and AI feedback are planned for later Trainer updates.
+AI feedback and scoring are planned for a later Trainer update.
