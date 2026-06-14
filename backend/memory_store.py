@@ -356,12 +356,20 @@ def apply_approved_memory_update(text, target_file, source_session_id,
     if marker in existing:
         return False
 
-    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # One UTC 'now' for both the day heading and the exact timestamp, so a
+    # reader can order same-day approvals reliably. The machine marker is
+    # unchanged; legacy blocks without the timestamp still parse.
+    now = datetime.now(timezone.utc)
+    date = now.strftime("%Y-%m-%d")
+    # microsecond precision so rapid same-second approvals order reliably;
+    # readers also accept the older second-only form for back-compat
+    approved_at = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     block = (
         f"\n{marker}\n"
         f"## Memory update — {date}\n\n"
         f"- Source session: {source_session_id}\n"
         f"- Proposal: {proposal_id}\n"
+        f"- Approved at UTC: {approved_at}\n"
         f"{_render_text_field(text)}\n"
     )
 
