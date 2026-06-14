@@ -22,6 +22,7 @@ from backend.grok_client import (
 )
 from backend.memory_store import ensure_memory_files
 from backend import (
+    memory_library,
     memory_review,
     mode_store,
     profile_store,
@@ -134,6 +135,19 @@ class AICoplotPro:
             archive_frm,
             text="Session History",
             command=self._open_session_history,
+            bg="#4a4a5e",
+            fg="white",
+            font=("Segoe UI", 8, "bold"),
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=8,
+            pady=2,
+        ).pack(side=tk.LEFT, padx=4, pady=2)
+
+        tk.Button(
+            archive_frm,
+            text="Approved Memory",
+            command=self._open_approved_memory,
             bg="#4a4a5e",
             fg="white",
             font=("Segoe UI", 8, "bold"),
@@ -1225,6 +1239,108 @@ class AICoplotPro:
         tk.Button(win, text="Close", command=win.destroy, bg="#6c757d",
                   fg="white", font=("Segoe UI", 9), relief=tk.FLAT,
                   cursor="hand2", padx=12, pady=3).pack(pady=6)
+        return win
+
+    def _open_approved_memory(self):
+        """Read-only, profile-bound view of approved session-memory entries
+        (Packet 7C). Never edits files or calls any LLM. Closes on a
+        profile switch via the shared window registry."""
+        try:
+            profile_id = profile_store.get_active_profile_id()
+        except ValueError as e:
+            messagebox.showerror("Select a Profile", str(e))
+            return
+
+        win = tk.Toplevel(self.root)
+        self._register_archive_window(win, profile_id)  # close on switch
+        try:
+            win.title("Approved Memory")
+            win.geometry("720x560")
+            win.configure(bg="#1e1e2e")
+            prof = profile_store.get_profile(profile_id) or {}
+            prof_name = prof.get("display_name", profile_id)
+
+            header = tk.Label(win, text="", bg="#1e1e2e", fg="#00d4ff",
+                              font=("Segoe UI", 10, "bold"))
+            header.pack(pady=(8, 2), padx=8)
+            tk.Label(
+                win,
+                text="Read-only. Approved memory from reviewed sessions, "
+                     "newest first. Editing/deleting is not part of this view.",
+                bg="#1e1e2e", fg="#9fd6ff", font=("Segoe UI", 8),
+                wraplength=700,
+            ).pack(padx=8)
+
+            text = scrolledtext.ScrolledText(
+                win, wrap=tk.WORD, font=("Segoe UI", 10), bg="#2b2b3e",
+                fg="#e0e0e0", padx=12, pady=12)
+            text.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+            def render():
+                # Re-resolve nothing about the profile; this window is bound
+                # to profile_id and is closed by a profile switch anyway.
+                text.config(state=tk.NORMAL)
+                text.delete("1.0", tk.END)
+                try:
+                    result = memory_library.read_approved_memory(profile_id)
+                except Exception:
+                    text.insert(tk.END, "Could not read approved memory for "
+                                        "this profile.")
+                    text.config(state=tk.DISABLED)
+                    return
+                entries = result["entries"]
+                warnings = result["warnings"]
+                header.config(
+                    text=f"Approved memory for: {prof_name}  "
+                         f"({len(entries)} "
+                         f"{'entry' if len(entries) == 1 else 'entries'})")
+                if warnings:
+                    text.insert(
+                        tk.END,
+                        f"Note: {warnings} malformed/incomplete "
+                        f"{'entry was' if warnings == 1 else 'entries were'} "
+                        "skipped.\n\n", "warn")
+                if not entries:
+                    text.insert(tk.END, "This profile has no approved session "
+                                        "memories yet.")
+                else:
+                    for e in entries:
+                        when = e.get("approved_at_utc") or e["date"]
+                        text.insert(
+                            tk.END,
+                            f"[{e['category']}  |  {e['target_file']}  |  "
+                            f"{when}]\n", "head")
+                        text.insert(tk.END, e["text"] + "\n")
+                        text.insert(
+                            tk.END,
+                            f"  approved: {e.get('approved_at_utc') or e['date']}"
+                            f"    source session: {e['session_id']}    "
+                            f"proposal: {e['proposal_id']}\n", "meta")
+                        text.insert(tk.END, "-" * 64 + "\n", "sep")
+                text.config(state=tk.DISABLED)
+
+            text.tag_config("head", foreground="#00ff00")
+            text.tag_config("meta", foreground="#9aa")
+            text.tag_config("warn", foreground="#ffa500")
+            render()
+            win._render = render  # exposed for tests
+
+            btns = tk.Frame(win, bg="#1e1e2e")
+            btns.pack(pady=6)
+            tk.Button(btns, text="Refresh", command=render, bg="#0d6efd",
+                      fg="white", font=("Segoe UI", 9), relief=tk.FLAT,
+                      cursor="hand2", padx=12, pady=3).pack(side=tk.LEFT, padx=4)
+            tk.Button(btns, text="Close", command=win.destroy, bg="#6c757d",
+                      fg="white", font=("Segoe UI", 9), relief=tk.FLAT,
+                      cursor="hand2", padx=12, pady=3).pack(side=tk.LEFT, padx=4)
+        except Exception as e:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            messagebox.showerror("Error",
+                                 f"Could not open Approved Memory: {e}")
+            return None
         return win
 
     def _open_session_history(self):

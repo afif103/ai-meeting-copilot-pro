@@ -86,25 +86,38 @@ def test_review_window_smoke():
             return m["session_id"]
 
         try:
-            # --- registration + transcript popup + profile-switch cleanup ---
+            # --- registration + transcript popup + Approved Memory +
+            #     profile-switch cleanup ---
             sid = _new_session()
             sr = app._open_session_review(sid, a["id"])
             rv = app._open_memory_review(sid, a["id"])
+            # read-only check: Approved Memory open + refresh must not touch
+            # any of profile A's memory files
+            a_mem = profile_store.get_profile_memory_dir(a["id"])
+            mem_before = {f.name: f.read_bytes() for f in a_mem.glob("*.md")}
+            am = app._open_approved_memory()  # Packet 7C read-only window
             app.root.update()
-            assert sr.winfo_exists() and rv.winfo_exists()
+            am._render()  # exercise Refresh
+            app.root.update()
+            mem_after = {f.name: f.read_bytes() for f in a_mem.glob("*.md")}
+            assert mem_after == mem_before  # read-only: no source file changed
+            assert sr.winfo_exists() and rv.winfo_exists() and am.winfo_exists()
             assert hasattr(rv, "_text_widgets")
+            assert hasattr(am, "_render")  # Approved Memory has a Refresh hook
 
             btns = _find_button(sr, "Open Transcript", [])
             assert btns
             btns[0].invoke()  # opens + registers the transcript popup
             app.root.update()
-            assert len(_live_toplevels(app)) >= 3  # session + memory + transcript
+            # session + memory + approved-memory + transcript
+            assert len(_live_toplevels(app)) >= 4
 
             app._refresh_profiles()
             app.profile_combo.current(app._profile_ids.index(b["id"]))
             app._on_profile_selected()
             app.root.update()
             assert _live_toplevels(app) == []  # all of A's windows closed
+            assert not am.winfo_exists()  # Approved Memory closed on switch
 
             # --- rendering failure leaves no untracked window ---
             profile_store.set_active_profile_id(a["id"])

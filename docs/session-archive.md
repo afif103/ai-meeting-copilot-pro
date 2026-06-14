@@ -71,15 +71,23 @@ Suggestions** to open the per-item review:
   persist across restarts.
 
 Approved entries are appended (never overwriting existing content) in a
-traceable block that records the source session and proposal:
+traceable block that records the source session, proposal, and the exact
+approval time:
 
 ```
-## Memory update — <UTC date>
+## Memory update — YYYY-MM-DD
 
 - Source session: <session-id>
 - Proposal: <proposal-id>
+- Approved at UTC: YYYY-MM-DDTHH:MM:SS.ffffffZ
 - Text: <approved or edited text>
 ```
+
+The `Approved at UTC` line uses a canonical UTC timestamp with microsecond
+precision, so entries approved within the same second still order
+reliably. Blocks approved before this was introduced have no
+`Approved at UTC` line (date-only); both forms remain supported and are
+displayed correctly, newest first.
 
 Approved meeting/work memory goes to neutral per-profile files
 (`decisions.md`, `ongoing_tasks.md`, `preferences.md`, `notes.md`,
@@ -90,6 +98,26 @@ Once approved, the Profile Copilot can use the new memory immediately.
 Approving into one profile never touches another profile's memory, and if
 you switch profiles the review actions are blocked until you switch back
 to the session's own profile.
+
+## Approved Memory (read-only library)
+
+The **Approved Memory** button opens a read-only window listing the
+entries you have approved into the active profile's memory, newest first.
+Each entry shows its category and target file, the approval date, the
+approved text (multiline preserved), and the source session and proposal
+IDs it came from — so every approved fact stays traceable.
+
+- **Local and profile-scoped:** it reads only the active profile's memory
+  files; it never shows another profile's entries, and it closes when you
+  switch profiles.
+- **Read-only:** opening, refreshing, sorting, and closing it never change
+  any file. It does not call Ollama or Groq.
+- Only the machine-marked blocks written by the review/approval flow are
+  listed; your own hand-written notes in those files are not shown as
+  approved entries. Malformed/incomplete blocks are skipped and reported
+  as a small "skipped" note rather than crashing the view.
+- **Editing or deleting approved memory is not part of this view** — that
+  is left to a separate future packet.
 
 ## Relationship to Save / Load
 
