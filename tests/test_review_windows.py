@@ -10,6 +10,7 @@ avoid multi-root fragility.
 
 import os
 import sys
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -25,7 +26,8 @@ try:
     _probe = tk.Tk()
     _probe.destroy()
     import desktop_app
-    from backend import memory_review, profile_store, session_store
+    from backend import (memory_review, profile_store, session_store,
+                         trainer_questions)
     _HAVE_UI = True
     _SKIP = ""
 except Exception as e:  # pragma: no cover - environment dependent
@@ -105,12 +107,93 @@ def test_review_window_smoke():
             assert hasattr(rv, "_text_widgets")
             assert hasattr(am, "_render")  # Approved Memory has a Refresh hook
 
+            # --- Packet 8A: Interview Trainer (profile-bound, no LLM / IO) ---
+            def _profile_files():
+                root = profile_store.get_profile_memory_dir(a["id"]).parent
+                return {p.relative_to(root).as_posix(): p.read_bytes()
+                        for p in root.rglob("*") if p.is_file()}
+
+            files_before = _profile_files()
+            mode_before = profile_store.get_profile_mode(a["id"])
+
+            # Arm the app's REAL generation entry points (each routes to local
+            # Ollama OR the cloud provider). If the Trainer touches any of
+            # them, the call raises immediately and fails this test - so no
+            # real Ollama/Groq request is ever attempted. Scoped patches are
+            # restored automatically even if an assertion fails.
+            _no_llm = AssertionError(
+                "Trainer must not call an LLM in Packet 8A")
+            with mock.patch.object(desktop_app, "generate_suggestion",
+                                   side_effect=_no_llm), \
+                 mock.patch.object(desktop_app, "generate_suggestion_stream",
+                                   side_effect=_no_llm), \
+                 mock.patch.object(desktop_app, "refine_transcript",
+                                   side_effect=_no_llm):
+                assert _find_button(app.root, "Trainer", [])  # toolbar wired
+                tr = app._open_trainer()
+                app.root.update()
+                assert tr is not None and tr.winfo_exists()
+                assert a["id"] in app._review_windows.owners()  # bound to A
+                T = tr._trainer
+                cc_easy = trainer_questions.get_questions("call_center", "easy")
+                # defaults: Call Center / Easy / Simple English, Q1 of 4
+                assert T["ids"]() == ("call_center", "easy")
+                assert T["simple_enabled"]() is True
+                assert T["position_text"]() == "Question 1 of 4"
+                assert T["question_text"]() == cc_easy[0].simple
+                assert T["prev_enabled"]() is False  # disabled at first
+                # Next -> Q2, Previous -> Q1
+                T["next"](); app.root.update()
+                assert T["position_text"]() == "Question 2 of 4"
+                assert T["prev_enabled"]() is True
+                T["prev"](); app.root.update()
+                assert T["position_text"]() == "Question 1 of 4"
+                # bounded at the start
+                T["prev"]()
+                assert T["position_text"]() == "Question 1 of 4"
+                # bounded at the end; Next disabled at the last question
+                for _ in range(5):
+                    T["next"]()
+                app.root.update()
+                assert T["position_text"]() == "Question 4 of 4"
+                assert T["next_enabled"]() is False
+                # changing track resets to Question 1
+                T["select_track"]("virtual_assistant"); app.root.update()
+                assert T["ids"]() == ("virtual_assistant", "easy")
+                assert T["position_text"]() == "Question 1 of 4"
+                # changing difficulty resets to Question 1
+                T["next"](); T["select_difficulty"]("hard"); app.root.update()
+                assert T["ids"]() == ("virtual_assistant", "hard")
+                assert T["position_text"]() == "Question 1 of 4"
+                # Simple English toggle changes wording, NOT the index
+                idx_before = T["state"]["index"]
+                simple_text = T["question_text"]()
+                T["set_simple"](False); app.root.update()
+                normal_text = T["question_text"]()
+                assert T["state"]["index"] == idx_before
+                assert normal_text != simple_text
+                assert normal_text == trainer_questions.get_questions(
+                    "virtual_assistant", "hard")[0].normal
+
+            # no profile-file write, no stored-mode change from the Trainer
+            assert _profile_files() == files_before
+            assert profile_store.get_profile_mode(a["id"]) == mode_before
+
+            # fail closed: opening with no active profile -> None, no window.
+            # Scoped patch restores get_active_profile_id even on assert fail.
+            n_before = len(_live_toplevels(app))
+            with mock.patch.object(profile_store, "get_active_profile_id",
+                                   side_effect=ValueError("none")):
+                assert app._open_trainer() is None
+            app.root.update()
+            assert len(_live_toplevels(app)) == n_before
+
             btns = _find_button(sr, "Open Transcript", [])
             assert btns
             btns[0].invoke()  # opens + registers the transcript popup
             app.root.update()
-            # session + memory + approved-memory + transcript
-            assert len(_live_toplevels(app)) >= 4
+            # session + memory + approved-memory + trainer + transcript
+            assert len(_live_toplevels(app)) >= 5
 
             app._refresh_profiles()
             app.profile_combo.current(app._profile_ids.index(b["id"]))
@@ -118,6 +201,7 @@ def test_review_window_smoke():
             app.root.update()
             assert _live_toplevels(app) == []  # all of A's windows closed
             assert not am.winfo_exists()  # Approved Memory closed on switch
+            assert not tr.winfo_exists()  # Trainer closed on switch
 
             # --- rendering failure leaves no untracked window ---
             profile_store.set_active_profile_id(a["id"])
